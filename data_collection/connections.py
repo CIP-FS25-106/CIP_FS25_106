@@ -10,7 +10,7 @@ import csv
 import logging
 from datetime import datetime, timedelta
 import pandas as pd
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional, Tuple, Any
 from pathlib import Path
 
 # Import from the same package
@@ -35,6 +35,23 @@ CONNECTION_PAIRS = [
 ]
 
 
+def safe_get(obj: Any, key: str, default: Any = None) -> Any:
+    """
+    Safely get a value from a dictionary, even if the object is None.
+    
+    Args:
+        obj: Dictionary-like object or None
+        key: Key to retrieve
+        default: Default value if key doesn't exist or obj is None
+        
+    Returns:
+        Value associated with key or default
+    """
+    if obj is None:
+        return default
+    return obj.get(key, default)
+
+
 def process_connection(connection: Dict) -> Dict:
     """
     Process a single connection to extract relevant information.
@@ -45,20 +62,29 @@ def process_connection(connection: Dict) -> Dict:
     Returns:
         Dict: Processed connection with only the relevant fields
     """
-    # Extract basic connection info
-    from_station = connection.get('from', {}).get('station', {})
-    to_station = connection.get('to', {}).get('station', {})
+    # Extract basic connection info with safe access
+    from_data = safe_get(connection, 'from', {})
+    to_data = safe_get(connection, 'to', {})
+    
+    from_station = safe_get(from_data, 'station', {})
+    to_station = safe_get(to_data, 'station', {})
     
     # Process departure and arrival times
-    departure = connection.get('from', {}).get('departure', None)
+    departure = safe_get(from_data, 'departure')
     departure_datetime = None
     if departure:
-        departure_datetime = datetime.fromisoformat(departure.replace('Z', '+00:00'))
+        try:
+            departure_datetime = datetime.fromisoformat(departure.replace('Z', '+00:00'))
+        except (ValueError, AttributeError) as e:
+            logger.warning(f"Error parsing departure time {departure}: {e}")
     
-    arrival = connection.get('to', {}).get('arrival', None)
+    arrival = safe_get(to_data, 'arrival')
     arrival_datetime = None
     if arrival:
-        arrival_datetime = datetime.fromisoformat(arrival.replace('Z', '+00:00'))
+        try:
+            arrival_datetime = datetime.fromisoformat(arrival.replace('Z', '+00:00'))
+        except (ValueError, AttributeError) as e:
+            logger.warning(f"Error parsing arrival time {arrival}: {e}")
     
     # Calculate duration
     duration_minutes = None
@@ -66,54 +92,70 @@ def process_connection(connection: Dict) -> Dict:
         duration = arrival_datetime - departure_datetime
         duration_minutes = duration.total_seconds() / 60
     
-    # Extract sections (legs of the journey)
-    sections = connection.get('sections', [])
-    transfers = len(sections) - 1 if sections else 0
+    # Extract sections (legs of the journey) with safe access
+    sections = safe_get(connection, 'sections', [])
+    if sections is None:
+        sections = []
+    
+    transfers = len([s for s in sections if s is not None]) - 1 if sections else 0
+    if transfers < 0:
+        transfers = 0
     
     # Extract delay information
-    departure_delay = connection.get('from', {}).get('delay', None)
-    arrival_delay = connection.get('to', {}).get('delay', None)
+    departure_delay = safe_get(from_data, 'delay')
+    arrival_delay = safe_get(to_data, 'delay')
     
     # Create processed entry
     processed = {
         'collection_date': datetime.now().strftime('%Y-%m-%d'),
         'collection_time': datetime.now().strftime('%H:%M:%S'),
-        'from_station_id': from_station.get('id', ''),
-        'from_station_name': from_station.get('name', ''),
-        'to_station_id': to_station.get('id', ''),
-        'to_station_name': to_station.get('name', ''),
+        'from_station_id': safe_get(from_station, 'id', ''),
+        'from_station_name': safe_get(from_station, 'name', ''),
+        'to_station_id': safe_get(to_station, 'id', ''),
+        'to_station_name': safe_get(to_station, 'name', ''),
         'departure_datetime': departure_datetime.strftime('%Y-%m-%d %H:%M:%S') if departure_datetime else None,
         'arrival_datetime': arrival_datetime.strftime('%Y-%m-%d %H:%M:%S') if arrival_datetime else None,
         'duration_minutes': duration_minutes,
         'transfers': transfers,
         'departure_delay': departure_delay,
         'arrival_delay': arrival_delay,
-        'products': ', '.join([section.get('journey', {}).get('category', '') for section in sections if 'journey' in section]),
-        'capacity1st': connection.get('capacity1st', None),
-        'capacity2nd': connection.get('capacity2nd', None),
+        'capacity1st': safe_get(connection, 'capacity1st'),
+        'capacity2nd': safe_get(connection, 'capacity2nd'),
     }
+    
+    # Safely extract product categories
+    product_categories = []
+    for section in sections:
+        if section is not None and 'journey' in section:
+            category = safe_get(section['journey'], 'category', '')
+            if category:
+                product_categories.append(category)
+    
+    processed['products'] = ', '.join(product_categories)
     
     # Add information about all sections (legs)
     for i, section in enumerate(sections):
-        if 'journey' in section:
+        if section is not None and 'journey' in section:
             journey = section['journey']
-            processed[f'section_{i+1}_category'] = journey.get('category', '')
-            processed[f'section_{i+1}_number'] = journey.get('number', '')
-            processed[f'section_{i+1}_operator'] = journey.get('operator', '')
+            processed[f'section_{i+1}_category'] = safe_get(journey, 'category', '')
+            processed[f'section_{i+1}_number'] = safe_get(journey, 'number', '')
+            processed[f'section_{i+1}_operator'] = safe_get(journey, 'operator', '')
             
             # Add section departure info
-            section_from = section.get('departure', {}).get('station', {})
-            processed[f'section_{i+1}_from_id'] = section_from.get('id', '')
-            processed[f'section_{i+1}_from_name'] = section_from.get('name', '')
-            processed[f'section_{i+1}_departure'] = section.get('departure', {}).get('departure', None)
-            processed[f'section_{i+1}_departure_delay'] = section.get('departure', {}).get('delay', None)
+            section_departure = safe_get(section, 'departure', {})
+            section_from = safe_get(section_departure, 'station', {})
+            processed[f'section_{i+1}_from_id'] = safe_get(section_from, 'id', '')
+            processed[f'section_{i+1}_from_name'] = safe_get(section_from, 'name', '')
+            processed[f'section_{i+1}_departure'] = safe_get(section_departure, 'departure')
+            processed[f'section_{i+1}_departure_delay'] = safe_get(section_departure, 'delay')
             
             # Add section arrival info
-            section_to = section.get('arrival', {}).get('station', {})
-            processed[f'section_{i+1}_to_id'] = section_to.get('id', '')
-            processed[f'section_{i+1}_to_name'] = section_to.get('name', '')
-            processed[f'section_{i+1}_arrival'] = section.get('arrival', {}).get('arrival', None)
-            processed[f'section_{i+1}_arrival_delay'] = section.get('arrival', {}).get('delay', None)
+            section_arrival = safe_get(section, 'arrival', {})
+            section_to = safe_get(section_arrival, 'station', {})
+            processed[f'section_{i+1}_to_id'] = safe_get(section_to, 'id', '')
+            processed[f'section_{i+1}_to_name'] = safe_get(section_to, 'name', '')
+            processed[f'section_{i+1}_arrival'] = safe_get(section_arrival, 'arrival')
+            processed[f'section_{i+1}_arrival_delay'] = safe_get(section_arrival, 'delay')
     
     return processed
 
@@ -155,18 +197,30 @@ def collect_connection_data(from_station: str, to_station: str, date: str,
     for time_slot in time_slots:
         logger.info(f"Collecting connections from {from_station} to {to_station} at {date} {time_slot}")
         
-        connections = get_connections(from_station, to_station, date=date, time=time_slot)
-        
-        for connection in connections:
-            processed = process_connection(connection)
-            all_connections.append(processed)
+        try:
+            connections = get_connections(from_station, to_station, date=date, time=time_slot)
+            
+            for connection in connections:
+                try:
+                    processed = process_connection(connection)
+                    all_connections.append(processed)
+                except Exception as e:
+                    logger.error(f"Error processing connection: {e}")
+                    # Continue with next connection
+        except Exception as e:
+            logger.error(f"Error getting connections: {e}")
+            # Continue with next time slot
     
     # Save data to CSV
     if all_connections:
-        df = pd.DataFrame(all_connections)
-        df.to_csv(output_path, index=False)
-        logger.info(f"Saved {len(all_connections)} connections to {output_path}")
-        return output_path
+        try:
+            df = pd.DataFrame(all_connections)
+            df.to_csv(output_path, index=False)
+            logger.info(f"Saved {len(all_connections)} connections to {output_path}")
+            return output_path
+        except Exception as e:
+            logger.error(f"Error saving connections to CSV: {e}")
+            return ""
     else:
         logger.warning(f"No connections found from {from_station} to {to_station} on {date}")
         return ""
@@ -192,9 +246,13 @@ def collect_daily_connections(date: str, time_slots: Optional[List[str]] = None,
     output_files = []
     
     for from_station, to_station in CONNECTION_PAIRS:
-        file_path = collect_connection_data(from_station, to_station, date, time_slots, data_dir)
-        if file_path:
-            output_files.append(file_path)
+        try:
+            file_path = collect_connection_data(from_station, to_station, date, time_slots, data_dir)
+            if file_path:
+                output_files.append(file_path)
+        except Exception as e:
+            logger.error(f"Error collecting connection data for {from_station} to {to_station} on {date}: {e}")
+            # Continue with next pair
     
     return output_files
 
@@ -228,8 +286,13 @@ def collect_monthly_connections(year: int, month: int,
     
     while current_date <= end_date:
         date_str = current_date.strftime('%Y-%m-%d')
-        files = collect_daily_connections(date_str, time_slots, data_dir)
-        output_files.extend(files)
+        try:
+            files = collect_daily_connections(date_str, time_slots, data_dir)
+            output_files.extend(files)
+        except Exception as e:
+            logger.error(f"Error collecting daily connections for {date_str}: {e}")
+            # Continue with next day
+        
         current_date += timedelta(days=1)
     
     return output_files

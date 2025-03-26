@@ -10,6 +10,7 @@ import time
 import json
 import os
 import logging
+import random
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Union, Any
 
@@ -42,9 +43,22 @@ REQUEST_COUNTER = {
     "last_reset": datetime.now().date()
 }
 
+# Rate limit tracking
+RATE_LIMIT_EXCEEDED = {
+    "connections": False,
+    "stationboard": False,
+    "locations": False,
+    "reset_time": datetime.now()
+}
+
 # Cache to minimize redundant requests
 API_CACHE = {}
 CACHE_EXPIRY = 3600  # Cache expiry in seconds
+
+# Backoff strategy parameters
+MAX_RETRIES = 3
+INITIAL_BACKOFF = 5  # seconds
+MAX_BACKOFF = 60  # seconds
 
 
 def _reset_counter_if_new_day():
@@ -70,6 +84,16 @@ def _check_rate_limit(endpoint_type: str) -> bool:
     """
     _reset_counter_if_new_day()
     
+    # Check if we're in a rate-limited state
+    if RATE_LIMIT_EXCEEDED[endpoint_type]:
+        # Check if the rate limit reset time has passed
+        if datetime.now() > RATE_LIMIT_EXCEEDED["reset_time"]:
+            logger.info(f"Rate limit cool-down period ended for {endpoint_type}. Attempting requests again.")
+            RATE_LIMIT_EXCEEDED[endpoint_type] = False
+        else:
+            logger.warning(f"Rate limit still in effect for {endpoint_type}. Waiting until {RATE_LIMIT_EXCEEDED['reset_time']}")
+            return False
+
     # If we don't have a specific limit for this endpoint, allow the request
     if endpoint_type not in MAX_REQUESTS_PER_DAY:
         return True
@@ -77,12 +101,13 @@ def _check_rate_limit(endpoint_type: str) -> bool:
     if REQUEST_COUNTER[endpoint_type] >= MAX_REQUESTS_PER_DAY[endpoint_type]:
         logger.warning(f"Rate limit exceeded for {endpoint_type}. Waiting until tomorrow.")
         return False
+    
     return True
 
 
 def _make_request(url: str, params: Dict, endpoint_type: str) -> Dict:
     """
-    Make a request to the API with rate limiting and caching.
+    Make a request to the API with rate limiting, retry logic, and caching.
     
     Args:
         url: API endpoint URL
@@ -103,31 +128,82 @@ def _make_request(url: str, params: Dict, endpoint_type: str) -> Dict:
     # Check rate limit
     if not _check_rate_limit(endpoint_type):
         # If we hit the rate limit, return empty result
-        return {"error": "Rate limit exceeded"}
+        return {"error": f"Rate limit exceeded for {endpoint_type}"}
     
-    # Add delay to prevent overwhelming the API
-    time.sleep(0.5)
+    # Implement retry with exponential backoff
+    retries = 0
+    backoff_time = INITIAL_BACKOFF
     
-    try:
-        logger.info(f"Making request to {url} with params {params}")
-        response = requests.get(url, params=params)
-        response.raise_for_status()
+    while retries <= MAX_RETRIES:
+        try:
+            # Add delay to prevent overwhelming the API
+            delay = 0.5 + (random.random() * 0.5)  # 0.5-1s random delay
+            time.sleep(delay)
+            
+            logger.info(f"Making request to {url} with params {params}")
+            response = requests.get(url, params=params)
+            
+            # If successful, process as normal
+            if response.status_code == 200:
+                # Update request counter
+                REQUEST_COUNTER[endpoint_type] += 1
+                
+                data = response.json()
+                
+                # Update cache
+                API_CACHE[cache_key] = {
+                    'data': data,
+                    'timestamp': time.time()
+                }
+                
+                return data
+            
+            # Handle rate limiting (429 Too Many Requests)
+            elif response.status_code == 429:
+                retries += 1
+                
+                # Get retry-after header or use exponential backoff
+                retry_after = response.headers.get('Retry-After')
+                if retry_after:
+                    try:
+                        wait_time = int(retry_after)
+                    except (ValueError, TypeError):
+                        wait_time = backoff_time
+                else:
+                    wait_time = backoff_time
+                
+                logger.warning(f"Rate limit hit (429) for {endpoint_type}. Retry {retries}/{MAX_RETRIES} after {wait_time} seconds")
+                
+                # Set the rate limit exceeded flag and reset time
+                RATE_LIMIT_EXCEEDED[endpoint_type] = True
+                RATE_LIMIT_EXCEEDED["reset_time"] = datetime.now() + timedelta(seconds=wait_time)
+                
+                if retries <= MAX_RETRIES:
+                    time.sleep(wait_time)
+                    # Increase backoff for next attempt
+                    backoff_time = min(backoff_time * 2, MAX_BACKOFF)
+                else:
+                    logger.error(f"Max retries exceeded for {url}")
+                    return {"error": f"Rate limit exceeded after {MAX_RETRIES} retries"}
+            
+            # Handle other errors
+            else:
+                response.raise_for_status()
         
-        # Update request counter
-        REQUEST_COUNTER[endpoint_type] += 1
-        
-        data = response.json()
-        
-        # Update cache
-        API_CACHE[cache_key] = {
-            'data': data,
-            'timestamp': time.time()
-        }
-        
-        return data
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Error making request to {url}: {e}")
-        return {"error": str(e)}
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Error making request to {url}: {e}")
+            
+            retries += 1
+            if retries <= MAX_RETRIES:
+                logger.info(f"Retrying ({retries}/{MAX_RETRIES}) after {backoff_time} seconds")
+                time.sleep(backoff_time)
+                # Increase backoff for next attempt
+                backoff_time = min(backoff_time * 2, MAX_BACKOFF)
+            else:
+                return {"error": str(e)}
+    
+    # If we've exhausted retries
+    return {"error": f"Failed after {MAX_RETRIES} retries"}
 
 
 def get_station_info(query: str) -> List[Dict]:
