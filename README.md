@@ -20,6 +20,13 @@ The project addresses the following research questions:
 
 **Bonus**: What is the distribution of delays in Swiss public transport across transport modes (type of trains, tram, bus, ship etc.)?
 
+## Notes for Development
+
+- The system currently focuses on three main stations: Lucern, Zürich HB, and Geneva
+- The code is structured to easily add more stations as needed
+- Rate limiting is implemented to respect the Swiss Transport API limits
+- Data is automatically organized by month for easier processing
+
 ## Data Sources
 
 The project utilizes the following data sources:
@@ -43,36 +50,29 @@ CIP_FS25_106/
 │   ├── __init__.py
 │   ├── api_client.py
 │   ├── station_board.py
-    ├── historical_data.py
+│   ├── historical_data.py
 │   └── connections.py
-│
 ├── data_processing/
 │   ├── __init__.py
 │   ├── cleaning.py
 │   └── integration.py
-│
 ├── analysis/
 │   ├── __init__.py
 │   ├── station_analysis.py
 │   ├── temporal_analysis.py
 │   └── disruption_analysis.py
-│
 ├── visualization/
 │   ├── __init__.py
 │   ├── delay_maps.py
 │   └── time_series.py
-│
 ├── utils/
 │   ├── __init__.py
 │   └── helpers.py
-│
 ├── data/
 │   ├── raw/
 │   └── processed/
-│
 ├── notebooks/
-├── requirements.txt
-└── README.md
+└── requirements.txt
 ```
 
 ## Methodology
@@ -81,39 +81,104 @@ Data preparation includes retrieving all relevant data, cleaning, pre-filtering,
 
 ## Setup and Installation
 
-1. Create a virtual environment:
-```
-python -m venv venv
-```
+1. Clone the repository
+2. Install required packages:
 
-2. Activate the virtual environment:
-   - Windows: `venv\Scripts\activate`
-   - macOS/Linux: `source venv/bin/activate`
-
-3. Install the requirements:
-```
+```bash
 pip install -r requirements.txt
 ```
 
 ## Usage
 
-### Running the Data Collection
+### Collecting Data for a Specific Month
 
-To collect data with default settings:
-```
-python main.py
-```
-
-With specific options:
-```
-python main.py --stations zurich,bern,basel --date-range 2025-01-01:2025-03-01 --transport-types IR,IC,S
+```bash
+python main.py --year 2025 --month 1
 ```
 
-Options:
-- `--stations`: Which stations to analyze (comma-separated)
-- `--date-range`: Date range for historical data
-- `--transport-types`: Types of transportation to include
-- `--max-requests`: Maximum number of API requests to make (to stay within rate limits)
+### Collecting Data for Multiple Months
+
+```bash
+python main.py --year 2025 --month 6 --all-months
+```
+
+This will collect data for January through June 2025.
+
+### Data Storage Structure
+
+Data is organized by month in the following structure:
+
+```
+data/
+├── raw/
+│   ├── 2025-01/
+│   │   ├── Luzern_2025-01-01.csv
+│   │   ├── Zürich_HB_2025-01-01.csv
+│   │   ├── connection_Zürich_HB_to_Luzern_2025-01-01.csv
+│   │   └── delay_info_2025-01-01.csv
+│   └── 2025-02/
+│       └── ...
+└── processed/
+    └── ...
+```
+
+## Key Features Collected
+
+### Station Board Data
+- Station ID and name
+- Train category and number
+- Scheduled and actual departure/arrival times
+- Delay information
+- Platform
+- Destination/origin
+
+### Connection Data
+- Origin and destination stations
+- Departure and arrival times
+- Duration and delays
+- Number of transfers
+- Train categories used
+- Capacity information
+
+### Historical Data
+- Archived station board data
+- Delay information and causes
+- Disruption details
+
+## Data Collection Modules
+
+### api_client.py
+
+Core client for interacting with the Swiss Transport API with rate limiting, caching, and error handling features.
+
+- `get_station_info()`: Retrieve information about train stations
+- `get_station_board()`: Get departure/arrival information for a station
+- `get_connections()`: Get connections between two stations
+
+### station_board.py
+
+Handles collecting and processing station board data (departures and arrivals).
+
+- `collect_station_data()`: Collect departure/arrival data for a single station
+- `collect_data_for_period()`: Collect data for a specific date range
+- `collect_monthly_data()`: Collect data for all stations for an entire month
+
+### connections.py
+
+Manages collecting and processing connection data between stations.
+
+- `collect_connection_data()`: Collect connections between two stations
+- `collect_daily_connections()`: Collect all connection pairs for a specific day
+- `collect_monthly_connections()`: Collect connections for an entire month
+
+## Connection Pairs
+
+- Zürich HB to Luzern,
+- Zürich HB to Genève,
+- Luzern to Genève
+
+## Time Slots
+time_slots = [06:00, 08:00, 10:00, 12:00, 14:00, 16:00, 18:00, 20:00]
 
 ### Data Processing and Analysis
 
@@ -133,7 +198,7 @@ Additional challenges include:
 - Large amount of data requiring significant computational resources
 - Uncertainty with the new API version launching on March 17th
 
-## Requirements
+## Dependencies
 
 - Python 3.8+
 - Pandas
@@ -142,6 +207,7 @@ Additional challenges include:
 - Matplotlib
 - Seaborn
 - Jupyter (for notebooks)
+
 
 ## Contributors
 
