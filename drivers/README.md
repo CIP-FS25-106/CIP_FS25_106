@@ -1,6 +1,6 @@
 # Driver Files
 
-This directory contains.exe driver files needed for web scraping components using Selenium.
+This directory contains the chromedriver.exe driver files for Win64, needed for web scraping components using Selenium.
 
 ## Chromedriver
 
