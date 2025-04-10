@@ -242,73 +242,44 @@ As noted in the methodology, the current data pipeline faces significant limitat
 
 ## Methodology
 
-To address our research questions, we used a structured methodology that spans data acquisition, transformation, and preparation for analysis. Given the complexity and heterogeneity of the available data, we segmented our approach into three main components: historical and archived data, current real-time data, and disruption-related information.
+Our methodology addresses the research questions through a three-component approach:
 
 ### Archive & Historical Data
-
-To build a comprehensive view of past delays and train activity in Switzerland, we retrieved and processed historical train data made publicly available through the Swiss Open Transport Archive. Our workflow consisted of four main stages:
-
-1. **Scraping ZIP Files**: Using a custom script with Selenium and Requests, we automated the download of all relevant .zip files containing train event logs from the opentransportdata.swiss archive. We filtered links by year (2022, 2023, 2024), storing the files in year-specific folders.
-
-2. **Unzipping and Cleanup**: Once downloaded, the ZIP files were automatically extracted using the patoolib library, and the original archives were deleted to preserve disk space.
-
-3. **Initial Filtering of Relevant Rows**: Given the large file sizes, we processed the CSV files in chunks and filtered rows that matched our criteria:
-   - Only Swiss Federal Railways (SBB) trains (PRODUKT_ID = 'Zug')
-   - Excluded passing trains and extra trains
-   - Included only specific key stations (Zürich HB, Luzern, Genève)
-   - Ensured arrival time predictions were available
-
-   Only relevant columns were kept, and the cleaned chunks were aggregated into a single intermediate file.
-
-4. **Data Transformation**: In the final transformation step, we parsed and standardized date and time formats, combining planned and predicted arrival times into datetime objects. A new DELAY column was calculated (in minutes), and delays were categorized into four groups: On time, 2 to 5 minutes, 5 to 15 minutes, and more than 15 minutes. Cancelled rides were also explicitly labeled.
+We processed historical train data from the Swiss Open Transport Archive through a pipeline of:
+1. **Web scraping** ZIP files from 2022-2024 using Selenium
+2. **Extracting archives** with patoolib and cleaning up to save space
+3. **Filtering data** in chunks to isolate SBB trains at key stations
+4. **Transforming timestamps** to calculate and categorize delays
 
 ### Current Data
+We built a modular system to interact with the Swiss Transport API:
+- Used `/stationboard` and `/connections` endpoints with rate limiting
+- Discovered limitations in arrival timestamp availability
+- Attempted workarounds that ultimately proved insufficient
+- Found current API data inadequate for accurate delay calculation
 
-Our data collection strategy relied primarily on two API endpoints from the Swiss Transport API (transport.opendata.ch): `/stationboard` and `/connections`. We leveraged Python's `requests` library to develop a robust collection system following modular design principles, creating dedicated modules for API client interactions, station board data processing, and connection data retrieval. This system systematically collected hourly data from January 2025 through April 06, 2025, for our three target stations: Zurich, Luzern, and Geneva.
-
-Despite implementing rate limiting, caching mechanisms, and error handling in our API client to work within the API's constraints (limited to 1000 route queries per day), we discovered critical limitations in both endpoints that prevented us from accurately measuring train delays:
-
-1. **Stationboard API Issue**: When requesting arrival data with the `type="arrival"`, the API returns records of trains arriving at the station but surprisingly omits their actual arrival timestamps. Instead, it provides only the departure times for when these trains continue their journey, making it impossible to determine when trains actually arrive at the station.
-
-2. **Connections API Limitation**: The `/connections` endpoint, which we hoped would fill this gap, only returns scheduled times rather than actual arrival timestamps needed for delay calculation, preventing us from calculating actual delays for journeys between stations.
-
-We attempted two approaches to address these limitations:
-- Extracting arrival times from the passList information in train journeys
-- Cross-referencing departure and arrival data to infer delays
-
-Unfortunately, neither approach yielded reliable results, as the necessary actual arrival timestamps were consistently absent from the API responses. This made it impossible to accurately calculate train delays using current data.
-
-Due to these constraints, our analysis ultimately relied on historical data sources rather than real-time API data. This experience revealed an important discrepancy between API documentation and actual data availability.
-
-### Causes and Disruptions
-
-The dataset for the causes and disruptions from the SBB has records since 2020. The data is unstructured, with essential details such as location, reason, affected line embedded in text blocks, as well as the start and end time for each interruption. To prepare the data for analysis, several transformation and cleaning steps were necessary.
-
-Historical data is downloaded from data.sbb.ch, while new data is retrieved via an API. Since the API limits each request to 100 records, a function was implemented to compare the "published" date of new entries with the latest entry in the historical dataset. This approach ensures that only missing entries are added.
-
-Duplicate entries were removed, as planned interruptions were republished nightly. Only the first published record of each interruption was kept. Rows containing "Aufgehoben" (removed) were dropped, as they were irrelevant.
-
-Additional columns were added, including Duration, Days until start, and a classification for planned or unplanned interruptions. Interruptions were categorized as unplanned if they were published on the same day they started. The reason for interruptions was extracted using regex patterns that identify phrases like "Der Grund dafür ist...". Affected train lines were extracted in a similar way.
+### Disruption Analysis
+We processed disruption data from SBB's records:
+- Cleaned duplicates and irrelevant entries
+- Added useful metrics like duration and planning status
+- Used regex to extract reasons and affected lines
 
 ## Results and Analysis
 
-Our analysis of Swiss train delays revealed several key insights about delay patterns across different stations, train categories, and time periods.
+Our analysis of Swiss train delays revealed several important patterns:
 
-### Delay Distribution by Train Category
-
-Long-distance and international trains (NightJet, RailJet, RJX) show the highest average delays, while regional and suburban trains (S-Bahn, RegioExpress) tend to be more punctual. This suggests that longer routes with more potential disruption points lead to greater delays.
+### Train Categories
+Long-distance and international trains experience significantly higher delays than regional services, highlighting how complexity increases delay risk.
 
 ![Average Delay per Train Category](./images/average_delay.png)
 
-### Station Performance Comparison
-
-All three analyzed stations (Zürich HB, Luzern, and Genève) show a high percentage of on-time trains (>84%). However, Luzern exhibits a higher proportion of delays in the 2-5 minute range (13.2%) compared to Zürich HB (11.2%), despite Zürich HB handling significantly more train traffic.
+### Station Performance
+Despite handling more traffic, Zürich HB maintains better punctuality than Luzern, showing that infrastructure scale may correlate with improved performance.
 
 ![Delay Categories per Station](./images/train_delay.png)
 
 ### Temporal Patterns
-
-Delays are more frequent during weekdays compared to weekends, with Tuesday being the peak day for delays at Luzern (18.9%). Throughout the day, delay rates rise noticeably during morning (7:00-9:00) and evening (17:00-19:00) rush hours, with Luzern reaching up to 30% delayed trains in the evening peak.
+Delays follow clear patterns: higher on weekdays (especially Tuesdays) and during morning and evening rush hours, with Luzern experiencing the most pronounced peaks.
 
 ![Delays by Day of Week](./images/frequencyvsseverity.png)
 
@@ -318,9 +289,7 @@ Delays are more frequent during weekdays compared to weekends, with Tuesday bein
 
 ## Conclusion
 
-The Swiss Transport API reveals important limitations in current public transport data availability that impact delay analysis. Despite collecting extensive data from January to April 2025, the absence of actual arrival timestamps in both API endpoints created an insurmountable obstacle for accurate delay calculating using current data.
-
-This experience highlights a critical gap between data availability and analytical requirements for transportation research. While the APIs provide comprehensive schedule information, they lack the essential actual timing data needed for meaningful delay analysis. Future efforts might benefit from direct collaboration with Swiss Federal Railways to access more complete timing data, or from enhancing the existing APIs to include the missing actual arrival timestamp information.
+Our project encountered significant obstacles with the Swiss Transport API, which lacks critical actual arrival timestamp data. Despite these challenges, our historical data analysis provides valuable insights into Swiss train delay patterns. Future research would benefit from direct collaboration with SBB to access more complete timing data.
 
 
 ## Setup and Installation
@@ -445,9 +414,15 @@ If the included chromedriver doesn't work with your version of Chrome:
 
 ## Contributors
 
-- Sahra ([@sahrabaettig](https://github.com/sahrabaettig))
-- Mika ([@mikachulab](https://github.com/mikachulab))
-- Roger ([@rogerjeasy](https://github.com/rogerjeasy))
+Our team collaborated to analyze different aspects of the Swiss train delay problem:
+
+| Team Member | Contribution Areas | GitHub |
+|-------------|-------------------|--------|
+| **Sahra** | Disruption causes analysis, unstructured text processing, and delay classification | [@sahrabaettig](https://github.com/sahrabaettig) |
+| **Mika** | Historical Data Pipeline, data extraction and transformation, retrospective analysis | [@mikachulab](https://github.com/mikachulab) |
+| **Roger** | Current Data Pipeline architecture, API integration, and real-time data analysis | [@rogerjeasy](https://github.com/rogerjeasy) |
+
+Each contributor's specialized focus allowed us to comprehensively address the multifaceted challenge of train delays from complementary perspectives.
 
 ## Sources
 
