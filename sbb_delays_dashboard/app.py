@@ -18,6 +18,31 @@ from sbb_delays_dashboard.components.visualizations import (
     create_day_of_week_chart, create_bubble_chart
 )
 
+# Check if data exists, if not generate it
+data_file_path = 'sbb_delays_dashboard/data/historical_transformed.csv'
+if not os.path.exists(data_file_path):
+    try:
+        # Make sure the directory exists
+        os.makedirs(os.path.dirname(data_file_path), exist_ok=True)
+        
+        # Try to import the dummy data generator
+        from sbb_delays_dashboard.generate_dummy_data.generate_dummy_data import generate_dummy_data
+        print(f"Generating dummy data at: {data_file_path}")
+        # Generate dummy data with fewer records for quicker processing
+        generate_dummy_data(output_file=data_file_path, num_records=10000)
+    except Exception as e:
+        print(f"Error generating dummy data: {e}")
+        # Create an empty DataFrame with the necessary columns
+        empty_df = pd.DataFrame(columns=[
+            'station_name', 'train_category', 'arrival_planned', 'arrival_actual',
+            'delay', 'delay_category', 'is_cancelled', 'hour', 'day_of_week',
+            'day_name', 'month', 'year', 'date'
+        ])
+        # Ensure directory exists
+        os.makedirs(os.path.dirname(data_file_path), exist_ok=True)
+        empty_df.to_csv(data_file_path, index=False)
+        print(f"Created empty dataset at: {data_file_path}")
+
 # Initialize the Dash app
 app = dash.Dash(
     __name__,
@@ -27,20 +52,29 @@ app = dash.Dash(
 app.title = "SBB Train Delays Dashboard"
 server = app.server
 
-# Load the data
-df = load_historical_data()
+# Load the data with a more robust approach
+print(f"Attempting to load data from: {data_file_path}")
+df = load_historical_data(file_path=data_file_path)
+print(f"Data loaded with {len(df)} records")
 
-# Get unique values for filters
-available_stations = sorted(df['station_name'].unique().tolist()) if 'station_name' in df.columns else []
-available_categories = sorted(df['train_category'].unique().tolist()) if 'train_category' in df.columns else []
+# Get unique values for filters with safety checks
+available_stations = sorted(df['station_name'].unique().tolist()) if 'station_name' in df.columns and len(df) > 0 else ['Zürich HB', 'Luzern', 'Genève']
+available_categories = sorted(df['train_category'].unique().tolist()) if 'train_category' in df.columns and len(df) > 0 else ['IC', 'IR', 'S', 'RE', 'EC', 'TGV']
 
-# Set default date range
-if 'arrival_planned' in df.columns:
-    default_start_date = df['arrival_planned'].min().date()
-    default_end_date = df['arrival_planned'].max().date()
-else:
+# Set default date range with safety checks
+try:
+    if 'arrival_planned' in df.columns and len(df) > 0 and hasattr(df['arrival_planned'], 'min') and hasattr(df['arrival_planned'].min(), 'date'):
+        default_start_date = df['arrival_planned'].min().date()
+        default_end_date = df['arrival_planned'].max().date()
+    else:
+        default_start_date = datetime(2022, 1, 1).date()
+        default_end_date = datetime(2024, 12, 31).date()
+except (AttributeError, TypeError) as e:
+    print(f"Error setting date range: {e}")
     default_start_date = datetime(2022, 1, 1).date()
     default_end_date = datetime(2024, 12, 31).date()
+
+print(f"Default date range: {default_start_date} to {default_end_date}")
 
 # App layout
 app.layout = html.Div(
@@ -261,19 +295,23 @@ def update_kpis(json_data):
     if not json_data:
         return "0", "0.0", "0.0", "0.0"
     
-    # Parse the JSON data
-    filtered_df = pd.read_json(json_data, orient='split')
-    
-    # Calculate statistics
-    stats = calculate_delay_stats(filtered_df)
-    
-    # Format values for display
-    total_trains = f"{stats['total_trains']:,}"
-    avg_delay = f"{stats['avg_delay']:.1f}"
-    on_time_rate = f"{stats['pct_on_time']:.1f}"
-    delayed_rate = f"{stats['pct_delayed']:.1f}"
-    
-    return total_trains, avg_delay, on_time_rate, delayed_rate
+    try:
+        # Parse the JSON data
+        filtered_df = pd.read_json(json_data, orient='split')
+        
+        # Calculate statistics
+        stats = calculate_delay_stats(filtered_df)
+        
+        # Format values for display
+        total_trains = f"{stats['total_trains']:,}"
+        avg_delay = f"{stats['avg_delay']:.1f}"
+        on_time_rate = f"{stats['pct_on_time']:.1f}"
+        delayed_rate = f"{stats['pct_delayed']:.1f}"
+        
+        return total_trains, avg_delay, on_time_rate, delayed_rate
+    except Exception as e:
+        print(f"Error updating KPIs: {e}")
+        return "0", "0.0", "0.0", "0.0"
 
 # Callback to update the delay distribution chart
 @app.callback(
@@ -285,11 +323,15 @@ def update_delay_distribution(json_data):
     if not json_data:
         return "No data available"
     
-    # Parse the JSON data
-    filtered_df = pd.read_json(json_data, orient='split')
-    
-    # Create the chart
-    return create_delay_distribution_chart(filtered_df)
+    try:
+        # Parse the JSON data
+        filtered_df = pd.read_json(json_data, orient='split')
+        
+        # Create the chart
+        return create_delay_distribution_chart(filtered_df)
+    except Exception as e:
+        print(f"Error updating delay distribution: {e}")
+        return html.Div("Error loading chart. Please try refreshing the page.")
 
 # Callback to update the train category chart
 @app.callback(
@@ -301,11 +343,15 @@ def update_train_category_chart(json_data):
     if not json_data:
         return "No data available"
     
-    # Parse the JSON data
-    filtered_df = pd.read_json(json_data, orient='split')
-    
-    # Create the chart
-    return create_train_category_chart(filtered_df)
+    try:
+        # Parse the JSON data
+        filtered_df = pd.read_json(json_data, orient='split')
+        
+        # Create the chart
+        return create_train_category_chart(filtered_df)
+    except Exception as e:
+        print(f"Error updating train category chart: {e}")
+        return html.Div("Error loading chart. Please try refreshing the page.")
 
 # Callback to update the station comparison chart
 @app.callback(
@@ -317,11 +363,15 @@ def update_station_comparison(json_data):
     if not json_data:
         return "No data available"
     
-    # Parse the JSON data
-    filtered_df = pd.read_json(json_data, orient='split')
-    
-    # Create the chart
-    return create_station_comparison_chart(filtered_df)
+    try:
+        # Parse the JSON data
+        filtered_df = pd.read_json(json_data, orient='split')
+        
+        # Create the chart
+        return create_station_comparison_chart(filtered_df)
+    except Exception as e:
+        print(f"Error updating station comparison: {e}")
+        return html.Div("Error loading chart. Please try refreshing the page.")
 
 # Callback to update the station bubble chart
 @app.callback(
@@ -333,11 +383,15 @@ def update_station_bubble(json_data):
     if not json_data:
         return "No data available"
     
-    # Parse the JSON data
-    filtered_df = pd.read_json(json_data, orient='split')
-    
-    # Create the chart
-    return create_bubble_chart(filtered_df)
+    try:
+        # Parse the JSON data
+        filtered_df = pd.read_json(json_data, orient='split')
+        
+        # Create the chart
+        return create_bubble_chart(filtered_df)
+    except Exception as e:
+        print(f"Error updating station bubble chart: {e}")
+        return html.Div("Error loading chart. Please try refreshing the page.")
 
 # Callback to update the day of week chart
 @app.callback(
@@ -349,11 +403,15 @@ def update_day_of_week(json_data):
     if not json_data:
         return "No data available"
     
-    # Parse the JSON data
-    filtered_df = pd.read_json(json_data, orient='split')
-    
-    # Create the chart
-    return create_day_of_week_chart(filtered_df)
+    try:
+        # Parse the JSON data
+        filtered_df = pd.read_json(json_data, orient='split')
+        
+        # Create the chart
+        return create_day_of_week_chart(filtered_df)
+    except Exception as e:
+        print(f"Error updating day of week chart: {e}")
+        return html.Div("Error loading chart. Please try refreshing the page.")
 
 # Callback to update the time of day chart
 @app.callback(
@@ -365,11 +423,15 @@ def update_time_of_day(json_data):
     if not json_data:
         return "No data available"
     
-    # Parse the JSON data
-    filtered_df = pd.read_json(json_data, orient='split')
-    
-    # Create the chart
-    return create_time_of_day_chart(filtered_df)
+    try:
+        # Parse the JSON data
+        filtered_df = pd.read_json(json_data, orient='split')
+        
+        # Create the chart
+        return create_time_of_day_chart(filtered_df)
+    except Exception as e:
+        print(f"Error updating time of day chart: {e}")
+        return html.Div("Error loading chart. Please try refreshing the page.")
 
 # Callback for navigation links
 @app.callback(

@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 import random
 import os
 
-def generate_dummy_data(output_file='data/historical_transformed.csv', num_records=100000):
+def generate_dummy_data(output_file='sbb_delays_dashboard/data/historical_transformed.csv', num_records=100000):
     """
     Generate synthetic train delay data that mimics the structure of historical SBB data
     
