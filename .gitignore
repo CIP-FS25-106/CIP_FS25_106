@@ -7,6 +7,9 @@ __pycache__/
 *__pycache__
 *.py[cod]
 *$py.class
+*.pyo
+*.pyd
+*.pyc
 
 # Log files
 *.log
@@ -25,6 +28,7 @@ env/
 ENV/
 
 # Data directories (unless specifically needed)
+data/
 data/
 
 # Jupyter Notebook
