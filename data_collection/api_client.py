@@ -14,6 +14,14 @@ import random
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Union, Any
 
+# Import configuration
+from config import (
+    BASE_URL, STATIONBOARD_ENDPOINT, CONNECTIONS_ENDPOINT, LOCATIONS_ENDPOINT,
+    MAX_REQUESTS_PER_DAY, REQUEST_COUNTER, RATE_LIMIT_EXCEEDED,
+    API_CACHE, CACHE_EXPIRY, MAX_RETRIES, INITIAL_BACKOFF, MAX_BACKOFF,
+    DEFAULT_STATION_BOARD_LIMIT, DEFAULT_CONNECTIONS_LIMIT
+)
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -24,41 +32,6 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
-
-# API endpoints
-BASE_URL = "http://transport.opendata.ch/v1"
-STATIONBOARD_ENDPOINT = f"{BASE_URL}/stationboard"
-CONNECTIONS_ENDPOINT = f"{BASE_URL}/connections"
-LOCATIONS_ENDPOINT = f"{BASE_URL}/locations"
-
-# Rate limiting parameters
-MAX_REQUESTS_PER_DAY = {
-    "connections": 1000,
-    "stationboard": 10080
-}
-REQUEST_COUNTER = {
-    "connections": 0,
-    "stationboard": 0,
-    "locations": 0,
-    "last_reset": datetime.now().date()
-}
-
-# Rate limit tracking
-RATE_LIMIT_EXCEEDED = {
-    "connections": False,
-    "stationboard": False,
-    "locations": False,
-    "reset_time": datetime.now()
-}
-
-# Cache to minimize redundant requests
-API_CACHE = {}
-CACHE_EXPIRY = 3600  # Cache expiry in seconds
-
-# Backoff strategy parameters
-MAX_RETRIES = 3
-INITIAL_BACKOFF = 5  # seconds
-MAX_BACKOFF = 60  # seconds
 
 
 def _reset_counter_if_new_day():
@@ -231,7 +204,7 @@ def get_station_info(query: str) -> List[Dict]:
 def get_station_board(station: str, date: Optional[str] = None, 
                      time: Optional[str] = None, 
                      type_: str = "departure",
-                     limit: int = 100) -> List[Dict]:
+                     limit: int = DEFAULT_STATION_BOARD_LIMIT) -> List[Dict]:
     """
     Get departure or arrival board for a station.
     
@@ -267,7 +240,7 @@ def get_connections(from_station: str, to_station: str,
                    date: Optional[str] = None,
                    time: Optional[str] = None,
                    isArrivalTime: bool = False,
-                   limit: int = 4) -> List[Dict]:
+                   limit: int = DEFAULT_CONNECTIONS_LIMIT) -> List[Dict]:
     """
     Get connections between two stations.
     
