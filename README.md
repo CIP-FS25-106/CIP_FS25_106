@@ -240,8 +240,6 @@ As noted in the methodology, the current data pipeline faces significant limitat
 2. **Connections API Limitation**: The connections endpoint returns only scheduled times rather than actual arrival timestamps
 3. **Missing Delay Data**: The absence of actual arrival timestamps makes accurate delay calculation impossible using current data alone
 
-Despite implementing attempted workarounds (such as extracting arrival times from passList and cross-referencing departure/arrival data), these limitations prevented accurate delay analysis from current data, making historical data the primary source for the project's analysis.
-
 ## Methodology
 
 To address our research questions, we used a structured methodology that spans data acquisition, transformation, and preparation for analysis. Given the complexity and heterogeneity of the available data, we segmented our approach into three main components: historical and archived data, current real-time data, and disruption-related information.
@@ -324,14 +322,55 @@ The Swiss Transport API reveals important limitations in current public transpor
 
 This experience highlights a critical gap between data availability and analytical requirements for transportation research. While the APIs provide comprehensive schedule information, they lack the essential actual timing data needed for meaningful delay analysis. Future efforts might benefit from direct collaboration with Swiss Federal Railways to access more complete timing data, or from enhancing the existing APIs to include the missing actual arrival timestamp information.
 
+
 ## Setup and Installation
 
-1. Clone the repository
-2. Install required packages:
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/CIP-FS25-106/CIP_FS25_106.git
+   cd CIP_FS25_106
+   ```
 
-```bash
-pip install -r requirements.txt
-```
+2. Create a virtual environment:
+
+   **Windows:**
+   ```bash
+   # Using venv (built into Python)
+   python -m venv venv
+   
+   # Activate the environment
+   venv\Scripts\activate
+   
+   # For PowerShell, use:
+   # .\venv\Scripts\Activate.ps1
+   ```
+
+   **macOS/Linux:**
+   ```bash
+   # Using venv
+   python3 -m venv venv
+   
+   # Activate the environment
+   source venv/bin/activate
+   ```
+
+   **Using Anaconda (all platforms):**
+   ```bash
+   # Create environment
+   conda create --name traindelay python=3.8
+   
+   # Activate environment
+   conda activate traindelay
+   ```
+
+3. Install required packages:
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+4. Set up ChromeDriver (for web scraping components):
+   - Ensure the ChromeDriver executable in the `drivers/` directory matches your Chrome version
+   - If needed, download the appropriate version from: https://chromedriver.chromium.org/downloads
 
 ### Requirements
 
