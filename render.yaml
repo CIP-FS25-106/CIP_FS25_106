@@ -5,7 +5,9 @@ services:
     buildCommand: |
       pip install -r requirements.txt
       pip install -e .
-    startCommand: gunicorn sbb_delays_dashboard.app:server
+    startCommand: gunicorn --bind 0.0.0.0:8050 sbb_delays_dashboard.app:server
     envVars:
       - key: PYTHON_VERSION
         value: 3.10.0
+      - key: PORT
+        value: 8050
