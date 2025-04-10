@@ -1,0 +1,4 @@
+from_station_name,to_station_name,departure_delay_mean,departure_delay_median,departure_delay_max,departure_delay_count,arrival_delay_mean,arrival_delay_median,arrival_delay_max,arrival_delay_count,journey_added_delay_mean,journey_added_delay_median,journey_added_delay_max,journey_added_delay_min,duration_minutes_mean,duration_minutes_median,duration_minutes_min,duration_minutes_max,transfers_mean,transfers_median,transfers_min,transfers_max,on_time_percentage
+Luzern,Genève,0.0,0.0,0,80,0.0,0.0,0,80,0.0,0.0,0,0,199.625,201.0,184,294,1.6375,2.0,1,6,100.0
+Zürich HB,Genève,0.0,0.0,0,80,0.0,0.0,0,80,0.0,0.0,0,0,182.5375,178.0,174,382,0.675,1.0,0,5,100.0
+Zürich HB,Luzern,0.0,0.0,0,80,0.0,0.0,0,80,0.0,0.0,0,0,45.475,44.5,41,50,0.0,0.0,0,0,100.0
