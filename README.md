@@ -1,4 +1,4 @@
-# Train Delays Analysis Combining SBB API
+# SBB Train Delays Analysis
 
 This project analyzes train delays in the Swiss public transport system by leveraging real-time and historical data from the Swiss Federal Railways (SBB) APIs and other open transport data sources.
 
