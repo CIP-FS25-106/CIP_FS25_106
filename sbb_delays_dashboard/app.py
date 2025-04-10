@@ -7,12 +7,12 @@ import numpy as np
 from datetime import datetime, timedelta
 
 # Import utility functions and components
-from utils.data_processing import (
+from sbb_delays_dashboard.utils.data_processing import (
     load_historical_data, filter_data, calculate_delay_stats,
     get_delay_by_time, get_delay_by_station_and_category, get_delay_categories_distribution
 )
-from components.header import create_header, create_filter_bar, create_kpi_cards
-from components.visualizations import (
+from sbb_delays_dashboard.components.header import create_header, create_filter_bar, create_kpi_cards
+from sbb_delays_dashboard.components.visualizations import (
     create_delay_distribution_chart, create_train_category_chart,
     create_station_comparison_chart, create_time_of_day_chart,
     create_day_of_week_chart, create_bubble_chart
