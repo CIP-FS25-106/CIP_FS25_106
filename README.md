@@ -19,6 +19,9 @@ This project analyzes train delays in the Swiss public transport system by lever
   - [4. Main Orchestration](#4-main-orchestration-mainpy)
   - [Data Flow](#data-flow)
   - [Challenges and Limitations](#challenges-and-limitations-of-the-current-data-pipeline)
+- [Interactive Dashboard](#interactive-dashboard)
+  - [Features](#features)
+  - [Deployment](#deployment)
 - [Methodology](#methodology)
   - [Archive & Historical Data](#archive--historical-data)
   - [Current Data](#current-data)
@@ -27,25 +30,22 @@ This project analyzes train delays in the Swiss public transport system by lever
   - [Delay Distribution by Train Category](#delay-distribution-by-train-category)
   - [Station Performance Comparison](#station-performance-comparison)
   - [Temporal Patterns](#temporal-patterns)
-- [Conclusion](#conclusion)
 - [Setup and Installation](#setup-and-installation)
   - [Requirements](#requirements)
 - [Usage](#usage)
   - [Collecting Data for a Specific Month](#collecting-data-for-a-specific-month)
   - [Collecting Data for Multiple Months](#collecting-data-for-multiple-months)
   - [Running the Historical Data Pipeline](#running-the-historical-data-pipeline)
+  - [Running the Interactive Dashboard](#running-the-interactive-dashboard)
 - [Driver Files](#driver-files)
   - [Chromedriver](#chromedriver)
 - [Contributors](#contributors)
 - [Sources](#sources)
 
+
 ## Introduction
 
-Switzerland depends on public transportation to move more than 1.3 million passengers daily through its Swiss Federal Railways (SBB) network (Baumgartner, 2024). Train delays remain a major problem despite Switzerland's well-known reputation for efficiency and punctuality. The disruptions which arise from infrastructure limitations and maintenance requirements, operational problems and outside factors negatively affect schedule dependability, passenger satisfaction and network efficiency.
-
-Our research project examines train delays by analyzing SBB public API data and additional open data sources because of these problems. The research investigates which train lines and stations experience the most delays and how time and day affect disruptions and whether construction incidents and other delays contribute to these problems.
-
-The project follows a complete data science pipeline starting with data acquisition and transformation followed by analysis and communication.
+Switzerland's SBB railway network transports 1.3+ million passengers daily, but faces delay challenges despite the country's reputation for punctuality. Our project analyzes train delays using SBB API and open data to identify which lines and stations experience most delays, how timing affects disruptions, and the impact of construction incidents. We implement a complete data science pipeline from data acquisition to visualization and analysis.
 
 ## Research Questions
 
@@ -254,6 +254,27 @@ As noted in the methodology, the current data pipeline faces significant limitat
 2. **Connections API Limitation**: The connections endpoint returns only scheduled times rather than actual arrival timestamps
 3. **Missing Delay Data**: The absence of actual arrival timestamps makes accurate delay calculation impossible using current data alone
 
+## Interactive Dashboard
+
+We have developed an interactive Dash-based dashboard that offers dynamic visualizations of Swiss train delay patterns, providing a more engaging and flexible way to explore our findings.
+
+### Features
+
+The dashboard includes four main visualization sections:
+
+1. **Delay Distribution Overview**: Interactive visualizations of overall delay patterns across the Swiss railway network
+2. **Train Category Analysis**: Dynamic charts showing how different train types (InterCity, InterRegio, etc.) experience varying delay patterns
+3. **Station Performance Comparison**: Side-by-side visualizations of delay metrics for Zürich HB, Luzern, and Genève
+4. **Temporal Pattern Analysis**: Interactive time-series visualizations showing delay patterns by hour of day and day of week
+
+The dashboard implements memory-efficient streaming techniques to process the large historical dataset, making it suitable for deployment on platforms with limited resources.
+
+### Deployment
+
+The dashboard is deployed on Render and can be accessed at: [https://sbb-delay-insights.onrender.com](https://sbb-delay-insights.onrender.com)
+
+*Note: As the dashboard is deployed on a free tier, it may experience occasional performance issues when processing the full historical dataset. For optimal performance, running the dashboard locally is recommended.*
+
 ## Methodology
 
 Our methodology addresses the research questions through a three-component approach:
@@ -300,10 +321,6 @@ Delays follow clear patterns: higher on weekdays (especially Tuesdays) and durin
 ![Delays by Hour of Day](./images/hour_delay.png)
 
 ![Delays by Weekday](./images/percentage_train_delay.png)
-
-## Conclusion
-
-Our project encountered significant obstacles with the Swiss Transport API, which lacks critical actual arrival timestamp data. Despite these challenges, our historical data analysis provides valuable insights into Swiss train delay patterns. Future research would benefit from direct collaboration with SBB to access more complete timing data.
 
 
 ## Setup and Installation
@@ -357,15 +374,7 @@ Our project encountered significant obstacles with the Swiss Transport API, whic
 
 ### Requirements
 
-- Python 3.8+
-- Pandas
-- NumPy
-- Requests
-- Matplotlib
-- Seaborn
-- Selenium (`pip install selenium`)
-- Patoolib (`pip install patool`)
-- Jupyter (for notebooks)
+All required packages are listed in `requirements.txt` file.
 
 ## Usage
 
@@ -412,6 +421,21 @@ To process historical data:
    python analysis/historical/historical_data_analysis.py
    ```
 
+### Running the Interactive Dashboard
+
+To launch the interactive dashboard locally:
+
+```bash
+python .\sbb_delays_dashboard\app.py
+```
+
+This will start the Dash server, and you can access the dashboard in your web browser at `http://127.0.0.1:8050/`. The dashboard provides interactive visualizations of:
+
+- Delay distribution overview
+- Train category analysis
+- Station performance comparison
+- Temporal patterns of delays
+
 ## Driver Files
 
 The `drivers/` directory contains the chromedriver.exe driver files for Win64, needed for web scraping components using Selenium.
@@ -434,7 +458,7 @@ Our team collaborated to analyze different aspects of the Swiss train delay prob
 |-------------|-------------------|--------|
 | **Sahra** | Disruption causes analysis, unstructured text processing, and delay classification | [@sahrabaettig](https://github.com/sahrabaettig) |
 | **Mika** | Historical Data Pipeline, data extraction and transformation, retrospective analysis | [@mikachulab](https://github.com/mikachulab) |
-| **Roger** | Current Data Pipeline architecture, API integration, and real-time data analysis | [@rogerjeasy](https://github.com/rogerjeasy) |
+| **Roger** | Current Data Pipeline architecture, API integration, and real-time data analysis, interactive visualization with Dash library | [@rogerjeasy](https://github.com/rogerjeasy) |
 
 Each contributor's specialized focus allowed us to comprehensively address the multifaceted challenge of train delays from complementary perspectives.
 
