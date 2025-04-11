@@ -1,466 +1,659 @@
 """
-visualizations.py - Module for creating visualizations in the SBB Train Delays Dashboard.
-This module implements all the visualizations from historical_data_analysis.py
-in a Dash/Plotly compatible format.
+visualizations.py - Dashboard visualization components
+
+This module provides the visualization components for the Swiss Train Delays Analysis Dashboard.
 """
 
 import pandas as pd
-import numpy as np
-import plotly.graph_objects as go
 import plotly.express as px
-from dash import html, dcc
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import dash_bootstrap_components as dbc
+from dash import dcc, html
+import numpy as np
+import logging
+from typing import Dict, List
+from utils.data_processing import (
+    DELAY_THRESHOLD, 
+    TARGET_STATIONS, 
+    TARGET_STATIONS_ORIGINAL,
+    get_delay_category_data,
+    get_category_delay_data,
+    get_bubble_chart_data,
+    get_weekday_heatmap_data,
+    get_hourly_lineplot_data,
+    load_and_prepare_data
+)
 
-# Constants
-DELAY_THRESHOLD = 2  # Minutes threshold for considering a train delayed
+# Configure logger
+logger = logging.getLogger(__name__)
 
-# SBB color scheme
-SBB_COLORS = {
-    'primary': '#CF0015',  # SBB red
-    'light_bg': '#f8f9fa',
-    'text': '#212529',
-    'secondary_text': '#6c757d',
-    'border': '#dee2e6',
-    'on_time': '#88CCEE',
-    'slight_delay': '#117733',
-    'medium_delay': '#DDCC77',
-    'severe_delay': '#CC6677',
-    'cancelled': '#AA4499'
-}
 
-def create_overview_delay_plot(df):
+def create_delay_distribution_section(df: pd.DataFrame) -> html.Div:
     """
-    Create an overview stripplot of delay distribution.
+    Create the overview delay distribution section.
     
     Args:
         df: Prepared DataFrame
-    """
-    try:
-        # Create a Plotly figure
-        fig = px.strip(df, x="delay", opacity=0.5)
         
-        # Update layout
-        fig.update_layout(
-            title="Overview of DELAY",
-            xaxis_title="Delay [min]",
-            height=300,
-            margin=dict(l=40, r=40, t=50, b=40),
-            plot_bgcolor=SBB_COLORS['light_bg'],
-            paper_bgcolor='white',
-            font=dict(color=SBB_COLORS['text'])
-        )
-        
-        return dcc.Graph(figure=fig, id="overview-delay-plot")
-    except Exception as e:
-        print(f"Error creating overview plot: {e}")
-        return html.Div("Error creating overview delay plot")
-
-
-def create_train_category_chart(df):
+    Returns:
+        html.Div: Overview section component
     """
-    Create a barplot showing average delay per train category.
+    # Sample data for histogram to improve performance
+    if len(df) > 50000:
+        sample_size = min(50000, int(len(df) * 0.2))
+        df_sample = df.sample(sample_size, random_state=42)
+        logger.info(f"Sampled data for histogram from {len(df)} to {len(df_sample)} records")
+    else:
+        df_sample = df
     
-    Args:
-        df: Prepared DataFrame
-    """
-    try:
-        # Group and sort
-        if 'train_category' not in df.columns or 'delay' not in df.columns:
-            return html.Div("Required columns missing for train category chart")
-        
-        avg_by_category = df.groupby("train_category")["delay"].mean().reset_index()
-        avg_by_category = avg_by_category.sort_values(by="delay", ascending=False)
-        
-        # Create the figure
-        fig = px.bar(
-            avg_by_category, 
-            x="train_category", 
-            y="delay",
-            color_discrete_sequence=[SBB_COLORS['primary']]
-        )
-        
-        # Add value labels on top of bars
-        fig.update_traces(
-            texttemplate='%{y:.2f}',
-            textposition='outside'
-        )
-        
-        # Update layout
-        fig.update_layout(
-            title="Average Delay per Train Category",
-            xaxis_title="Train Category",
-            yaxis_title="Average Delay [min]",
-            yaxis=dict(range=[0, 26]),
-            height=300,
-            margin=dict(l=40, r=40, t=50, b=40),
-            plot_bgcolor=SBB_COLORS['light_bg'],
-            paper_bgcolor='white',
-            font=dict(color=SBB_COLORS['text'])
-        )
-        
-        # Rotate x-axis labels
-        fig.update_xaxes(tickangle=45)
-        
-        return dcc.Graph(figure=fig, id="train-category-chart")
-    except Exception as e:
-        print(f"Error creating train category chart: {e}")
-        return html.Div("Error creating train category chart")
-
-
-def create_delay_distribution_chart(df):
-    """
-    Create a pie chart showing the distribution of trains across delay categories.
+    # Create histogram for delay distribution
+    fig = px.histogram(
+        df_sample, 
+        x="DELAY",
+        title="Distribution of Train Delays",
+        labels={"DELAY": "Delay (minutes)"},
+        opacity=0.8,
+        color_discrete_sequence=['#4472C4'],
+        marginal="box",
+        range_x=[-5, 30]  # Limit x-axis range for better visualization
+    )
     
-    Args:
-        df: Prepared DataFrame
-    """
-    try:
-        if 'DELAY_CAT' not in df.columns:
-            # If the DELAY_CAT column is not present, create it
-            if 'delay' in df.columns:
-                conditions = [
-                    (df['delay'] <= DELAY_THRESHOLD),
-                    (df['delay'] > DELAY_THRESHOLD) & (df['delay'] <= 5),
-                    (df['delay'] > 5) & (df['delay'] <= 15),
-                    (df['delay'] > 15)
+    fig.update_layout(
+        template="plotly_white",
+        hoverlabel=dict(
+            bgcolor="white",
+            font_size=12,
+            font_family="Arial"
+        ),
+        title_font=dict(size=20),
+        xaxis_title_font=dict(size=14),
+        yaxis_title_font=dict(size=14),
+        yaxis_title="Number of Trains",
+        autosize=True,
+        margin=dict(l=40, r=40, t=70, b=40),
+        legend_title_font=dict(size=14),
+        legend_font=dict(size=12),
+        height=500,  # Set a fixed height for better appearance
+    )
+    
+    # Add a vertical line to mark delays above threshold
+    fig.add_vline(
+        x=DELAY_THRESHOLD, 
+        line_width=2, 
+        line_dash="dash", 
+        line_color="red",
+        annotation_text=f"Delay Threshold ({DELAY_THRESHOLD} min)",
+        annotation_position="top right"
+    )
+    
+    # Create section
+    return html.Div(
+        id="overview-section",
+        className="dashboard-section",
+        children=[
+            html.H2("Delay Distribution Overview", className="section-title"),
+            html.P(
+                f"Analysis of train delay distribution across all stations, with delays greater than {DELAY_THRESHOLD} minutes marked as late.",
+                className="section-description"
+            ),
+            dbc.Card(
+                dbc.CardBody([
+                    dcc.Graph(
+                        id='delay-distribution-graph',
+                        figure=fig,
+                        config={'displayModeBar': True, 'responsive': True},
+                        className="graph-container"
+                    ),
+                ]),
+                className="graph-card"
+            ),
+            html.Div(
+                className="insights-container",
+                children=[
+                    dbc.Card(
+                        dbc.CardBody([
+                            html.H4("Key Insights", className="insights-title"),
+                            html.Ul([
+                                html.Li("Most trains run on time or with minimal delays"),
+                                html.Li(f"A significant cluster of delays falls within the {DELAY_THRESHOLD}-5 minute range"),
+                                html.Li("Severe delays (15+ minutes) are relatively rare but impactful"),
+                            ]),
+                        ]),
+                        className="insights-card"
+                    ),
                 ]
-                choices = ['On time', '2 to 5minutes', '5 to 15minutes', 'more than 15minutes']
-                df['DELAY_CAT'] = np.select(conditions, choices, default='Cancelled')
-            else:
-                return html.Div("Required columns missing for delay distribution chart")
-        
-        # Count the occurrences of each delay category
-        delay_counts = df['DELAY_CAT'].value_counts().reset_index()
-        delay_counts.columns = ['category', 'count']
-        
-        # Define the colors for each category
-        colors = {
-            "On time": SBB_COLORS['on_time'],
-            "2 to 5minutes": SBB_COLORS['slight_delay'],
-            "5 to 15minutes": SBB_COLORS['medium_delay'],
-            "more than 15minutes": SBB_COLORS['severe_delay'],
-            "Cancelled": SBB_COLORS['cancelled']
-        }
-        
-        # Define category order
-        category_order = ["On time", "2 to 5minutes", "5 to 15minutes", "more than 15minutes", "Cancelled"]
-        delay_counts['category'] = pd.Categorical(delay_counts['category'], categories=category_order, ordered=True)
-        delay_counts = delay_counts.sort_values('category')
-        
-        # Assign colors based on category
-        color_values = [colors.get(cat, "#999999") for cat in delay_counts['category']]
-        
-        # Create the pie chart
-        fig = go.Figure(data=[go.Pie(
-            labels=delay_counts['category'],
-            values=delay_counts['count'],
-            hole=.4,
-            marker_colors=color_values
-        )])
-        
-        # Update layout
-        fig.update_layout(
-            title="Delay Categories Distribution",
-            height=300,
-            margin=dict(l=20, r=20, t=50, b=20),
-            legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5),
-            paper_bgcolor='white',
-            font=dict(color=SBB_COLORS['text'])
-        )
-        
-        return dcc.Graph(figure=fig, id="delay-distribution-chart")
-    except Exception as e:
-        print(f"Error creating delay distribution chart: {e}")
-        return html.Div("Error creating delay distribution chart")
+            )
+        ]
+    )
 
 
-def create_station_comparison_chart(df):
+def create_category_delay_section(df: pd.DataFrame) -> html.Div:
     """
-    Create a horizontal barplot showing percentage of trains in each delay category per station.
+    Create the train category delay section.
     
     Args:
         df: Prepared DataFrame
+        
+    Returns:
+        html.Div: Train category section component
+    """
+    # Get pre-aggregated data
+    avg_by_category = get_category_delay_data()
+    
+    # Limit to top 10 categories for better visualization
+    if len(avg_by_category) > 10:
+        avg_by_category = avg_by_category.head(10)
+    
+    # Create bar chart
+    fig = px.bar(
+        avg_by_category, 
+        x="train_category", 
+        y="DELAY", 
+        title="Average Delay per Train Category",
+        labels={"train_category": "Train Category", "DELAY": "Average Delay (minutes)"},
+        color="DELAY",
+        color_continuous_scale="Viridis",
+        text_auto='.1f'
+    )
+    
+    fig.update_traces(
+        textfont_size=12, 
+        textangle=0, 
+        textposition="outside", 
+        cliponaxis=False
+    )
+    
+    fig.update_layout(
+        template="plotly_white",
+        hoverlabel=dict(
+            bgcolor="white",
+            font_size=12,
+            font_family="Arial"
+        ),
+        title_font=dict(size=20),
+        xaxis_title_font=dict(size=14),
+        yaxis_title_font=dict(size=14),
+        autosize=True,
+        margin=dict(l=40, r=40, t=70, b=40),
+        coloraxis_showscale=False,
+        xaxis={'categoryorder':'total descending'},
+        height=500,  # Set a fixed height
+    )
+    
+    # Create section
+    return html.Div(
+        id="category-section",
+        className="dashboard-section",
+        children=[
+            html.H2("Train Category Analysis", className="section-title"),
+            html.P(
+                "Comparison of average delays across different train categories in the Swiss railway system.",
+                className="section-description"
+            ),
+            dbc.Card(
+                dbc.CardBody([
+                    dcc.Graph(
+                        id='category-delay-graph',
+                        figure=fig,
+                        config={'displayModeBar': True, 'responsive': True},
+                        className="graph-container"
+                    ),
+                ]),
+                className="graph-card"
+            ),
+            html.Div(
+                className="insights-container",
+                children=[
+                    dbc.Card(
+                        dbc.CardBody([
+                            html.H4("Key Insights", className="insights-title"),
+                            html.Ul([
+                                html.Li("Long-distance and international trains experience higher delays"),
+                                html.Li("Regional and commuter services tend to be more punctual"),
+                                html.Li("Complex routes and cross-border services face more disruptions"),
+                            ]),
+                        ]),
+                        className="insights-card"
+                    ),
+                ]
+            )
+        ]
+    )
+
+
+def create_station_delay_section(df: pd.DataFrame) -> html.Div:
+    """
+    Create the station delay analysis section.
+    
+    Args:
+        df: Prepared DataFrame
+        
+    Returns:
+        html.Div: Station section component
     """
     try:
-        if 'station_name' not in df.columns:
-            return html.Div("Required columns missing for station comparison chart")
-            
-        # Ensure DELAY_CAT exists
-        if 'DELAY_CAT' not in df.columns:
-            if 'delay' in df.columns:
-                conditions = [
-                    (df['delay'] <= DELAY_THRESHOLD),
-                    (df['delay'] > DELAY_THRESHOLD) & (df['delay'] <= 5),
-                    (df['delay'] > 5) & (df['delay'] <= 15),
-                    (df['delay'] > 15)
-                ]
-                choices = ['On time', '2 to 5minutes', '5 to 15minutes', 'more than 15minutes']
-                df['DELAY_CAT'] = np.select(conditions, choices, default='Cancelled')
-            else:
-                return html.Div("Required columns missing for station comparison chart")
+        # Get list of available stations in the data
+        available_stations = df["station_name"].unique().tolist()
+        logger.info(f"Available stations for station delay section: {available_stations}")
         
-        # Get unique stations
-        stations = df['station_name'].unique().tolist()
-        
-        # Count number of trains in each delay category
-        counts = df.groupby(["station_name", "DELAY_CAT"]).size().reset_index(name="count")
-        
-        # Calculate percentages
-        totals = counts.groupby("station_name")["count"].sum().reset_index(name="total")
-        counts = counts.merge(totals, on="station_name")
-        counts["percentage"] = 100 * counts["count"] / counts["total"]
+        # Get pre-aggregated data
+        counts = get_delay_category_data()
         
         # Define the categories order and colors
-        categories = ["On time", "2 to 5minutes", "5 to 15minutes", "more than 15minutes", "Cancelled"]
+        categories = [
+            "On time", 
+            "2 to 5minutes", 
+            "5 to 15minutes", 
+            "more than 15minutes", 
+            "Cancelled"
+        ]
+        
         colors = {
-            "On time": SBB_COLORS['on_time'],
-            "2 to 5minutes": SBB_COLORS['slight_delay'],
-            "5 to 15minutes": SBB_COLORS['medium_delay'],
-            "more than 15minutes": SBB_COLORS['severe_delay'],
-            "Cancelled": SBB_COLORS['cancelled']
+            "On time": "#88CCEE",
+            "2 to 5minutes": "#117733",
+            "5 to 15minutes": "#DDCC77",
+            "more than 15minutes": "#CC6677",
+            "Cancelled": "#AA4499"
         }
         
-        # Create figure
-        fig = go.Figure()
+        # Create stacked bar chart for delay categories
+        fig1 = go.Figure()
         
-        # Prepare data for stacked bars
-        for category in categories:
-            # Filter for current category
-            category_data = counts[counts["DELAY_CAT"] == category]
+        for cat in categories:
+            subset = counts[counts["DELAY_CAT"] == cat]
+            station_data = {}
             
-            # Create a trace for each category
-            fig.add_trace(go.Bar(
-                y=category_data["station_name"],
-                x=category_data["percentage"],
-                name=category,
+            for station in available_stations:
+                val = subset[subset["station_name"] == station]["percentage"]
+                station_data[station] = val.values[0] if not val.empty else 0
+            
+            fig1.add_trace(go.Bar(
+                name=cat,
+                y=list(station_data.keys()),
+                x=list(station_data.values()),
                 orientation='h',
-                marker=dict(color=colors.get(category, "#999999")),
-                text=category_data["percentage"].apply(lambda x: f"{x:.1f}%" if x > 5 else ""),
+                marker=dict(color=colors[cat]),
+                text=[f"{x:.1f}%" for x in station_data.values()],
                 textposition="inside",
                 insidetextanchor="middle",
-                textfont=dict(color="white")
+                width=0.6
             ))
         
-        # Set up the layout for a stacked bar chart
-        fig.update_layout(
-            barmode='stack',
+        fig1.update_layout(
             title="Train Delay Categories per Station",
-            xaxis_title="Trains [%]",
+            template="plotly_white",
+            barmode='stack',
+            hoverlabel=dict(
+                bgcolor="white",
+                font_size=12,
+                font_family="Arial"
+            ),
+            title_font=dict(size=20),
+            xaxis_title="Percentage of Trains",
             yaxis_title="Station",
-            height=300,
-            margin=dict(l=40, r=40, t=50, b=40),
-            legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5),
-            plot_bgcolor=SBB_COLORS['light_bg'],
-            paper_bgcolor='white',
-            font=dict(color=SBB_COLORS['text'])
+            xaxis_title_font=dict(size=14),
+            yaxis_title_font=dict(size=14),
+            autosize=True,
+            margin=dict(l=40, r=40, t=70, b=40),
+            legend_title="Delay Category",
+            legend_title_font=dict(size=14),
+            legend_font=dict(size=12),
+            height=500,  # Set a fixed height
         )
         
-        return dcc.Graph(figure=fig, id="station-comparison-chart")
-    except Exception as e:
-        print(f"Error creating station comparison chart: {e}")
-        return html.Div("Error creating station comparison chart")
-
-
-def create_bubble_chart(df):
-    """
-    Create a bubble chart showing delay frequency vs severity for each station.
-    
-    Args:
-        df: Prepared DataFrame
-    """
-    try:
-        if 'station_name' not in df.columns or 'delay' not in df.columns:
-            return html.Div("Required columns missing for bubble chart")
-        
-        # Get unique stations
-        stations = df['station_name'].unique().tolist()
-        
-        # Mean, total and sum of delayed trains more than DELAY_THRESHOLD minutes by station
-        summary = df.groupby("station_name").agg(
-            avg_delay=("delay", "mean"),
-            total_trains=("delay", "count"),
-            delayed_trains=("delay", lambda x: (x > DELAY_THRESHOLD).sum())
-        ).reset_index()
-        
-        # Calculate percentage of delayed trains
-        summary["pct_delayed"] = 100 * summary["delayed_trains"] / summary["total_trains"]
+        # Get pre-aggregated data for bubble chart
+        summary = get_bubble_chart_data()
         
         # Create bubble chart
-        fig = px.scatter(
+        fig2 = px.scatter(
             summary, 
-            x="pct_delayed",
+            x="pct_delayed", 
             y="avg_delay",
             size="total_trains",
-            size_max=50,
+            hover_name="station_name",
             text="station_name",
-            opacity=0.7,
-            color_discrete_sequence=[SBB_COLORS['primary']]
-        )
-        
-        # Update traces for better appearance
-        fig.update_traces(
-            marker=dict(
-                line=dict(width=1, color='black')
-            ),
-            textposition="top right"
-        )
-        
-        # Update layout
-        fig.update_layout(
+            labels={
+                "pct_delayed": "Delayed Trains (%)",
+                "avg_delay": "Average Delay (minutes)",
+                "total_trains": "Total Number of Trains"
+            },
             title="Station Delay Analysis: Frequency vs Severity",
-            xaxis_title="Delayed Trains [%]",
-            yaxis_title="Average Delay [min]",
-            height=300,
-            margin=dict(l=40, r=40, t=50, b=40),
-            plot_bgcolor=SBB_COLORS['light_bg'],
-            paper_bgcolor='white',
-            font=dict(color=SBB_COLORS['text'])
+            color_discrete_sequence=["#4472C4"],
+            size_max=60,
         )
         
-        # Add grid
-        fig.update_xaxes(showgrid=True, gridwidth=1, gridcolor='lightgray')
-        fig.update_yaxes(showgrid=True, gridwidth=1, gridcolor='lightgray')
+        fig2.update_traces(
+            textposition="top center",
+            marker=dict(opacity=0.7, line=dict(width=1, color='DarkSlateGrey')),
+        )
         
-        return dcc.Graph(figure=fig, id="station-bubble-chart")
+        fig2.update_layout(
+            template="plotly_white",
+            hoverlabel=dict(
+                bgcolor="white",
+                font_size=12,
+                font_family="Arial"
+            ),
+            title_font=dict(size=20),
+            xaxis_title_font=dict(size=14),
+            yaxis_title_font=dict(size=14),
+            autosize=True,
+            margin=dict(l=40, r=40, t=70, b=40),
+            height=500,  # Set a fixed height
+        )
+        
+        # Create available/missing stations notification
+        missing_stations = [station for station in TARGET_STATIONS_ORIGINAL if station not in available_stations]
+        station_notification = ""
+        if missing_stations:
+            station_notification = html.Div([
+                dbc.Alert(
+                    [
+                        html.Strong("Note: "), 
+                        f"Some target stations are missing from the data. Showing data for {', '.join(available_stations)}.",
+                        html.Br(),
+                        f"Missing stations: {', '.join(missing_stations)}"
+                    ],
+                    color="warning",
+                    className="mb-4"
+                )
+            ])
+        
+        # Create section with both visualizations (now in separate rows)
+        return html.Div(
+            id="station-section",
+            className="dashboard-section",
+            children=[
+                html.H2("Station Performance Comparison", className="section-title"),
+                html.P(
+                    "Analysis of delay patterns across key Swiss railway stations.",
+                    className="section-description"
+                ),
+                station_notification,
+                # First graph in its own row
+                dbc.Row([
+                    dbc.Col([
+                        dbc.Card(
+                            dbc.CardBody([
+                                dcc.Graph(
+                                    id='delay-category-graph',
+                                    figure=fig1,
+                                    config={'displayModeBar': True, 'responsive': True},
+                                    className="graph-container"
+                                ),
+                            ]),
+                            className="graph-card"
+                        ),
+                    ], width=12),
+                ], className="mb-4"),
+                # Second graph in its own row
+                dbc.Row([
+                    dbc.Col([
+                        dbc.Card(
+                            dbc.CardBody([
+                                dcc.Graph(
+                                    id='station-bubble-graph',
+                                    figure=fig2,
+                                    config={'displayModeBar': True, 'responsive': True},
+                                    className="graph-container"
+                                ),
+                            ]),
+                            className="graph-card"
+                        ),
+                    ], width=12),
+                ]),
+                html.Div(
+                    className="insights-container",
+                    children=[
+                        dbc.Card(
+                            dbc.CardBody([
+                                html.H4("Key Insights", className="insights-title"),
+                                html.Ul([
+                                    html.Li("Zürich HB maintains better punctuality despite handling more train traffic"),
+                                    html.Li("Luzern experiences the highest percentage of moderate delays (5-15 minutes)"),
+                                    html.Li("Genève shows a balanced profile with intermediate performance on most metrics"),
+                                ]),
+                            ]),
+                            className="insights-card"
+                        ),
+                    ]
+                )
+            ]
+        )
     except Exception as e:
-        print(f"Error creating bubble chart: {e}")
-        return html.Div("Error creating bubble chart")
+        logger.error(f"Error in create_station_delay_section: {e}")
+        
+        # Fallback visualization with error message
+        return html.Div(
+            id="station-section",
+            className="dashboard-section",
+            children=[
+                html.H2("Station Performance Comparison", className="section-title"),
+                html.P(
+                    "Error creating station performance comparison. Please check data integrity.",
+                    className="section-description text-danger"
+                ),
+                dbc.Alert(
+                    f"Error: {str(e)}", 
+                    color="danger",
+                    dismissable=True
+                ),
+                html.Div(
+                    f"Available stations: {', '.join(df['station_name'].unique())}",
+                    className="mt-3"
+                )
+            ]
+        )
 
 
-def create_day_of_week_chart(df):
+def create_time_patterns_section(df: pd.DataFrame) -> html.Div:
     """
-    Create a heatmap showing percentage of delayed trains by station and day of week.
+    Create the time patterns analysis section.
     
     Args:
         df: Prepared DataFrame
+        
+    Returns:
+        html.Div: Time patterns section component
     """
     try:
-        # Ensure required columns exist
-        if 'station_name' not in df.columns or 'ride_day' not in df.columns:
-            # Check if there's a date column that could be used instead
-            if 'arrival_planned' in df.columns:
-                df['ride_day'] = pd.to_datetime(df['arrival_planned']).dt.date
-            else:
-                return html.Div("Required columns missing for day of week chart")
+        # Get list of available stations in the data
+        available_stations = df["station_name"].unique().tolist()
+        logger.info(f"Available stations for time patterns section: {available_stations}")
         
-        # Convert ride_day to datetime if it's not already
-        if not pd.api.types.is_datetime64_any_dtype(df['ride_day']):
-            df['ride_day'] = pd.to_datetime(df['ride_day'])
+        # Get pre-aggregated data
+        heatmap_data = get_weekday_heatmap_data()
         
-        # Extract weekday name
-        df["day_of_week"] = df["ride_day"].dt.day_name()
+        # Create pivoted dataframe for the heatmap
+        pivot_data = heatmap_data.pivot(index="station_name", columns="day_of_week", values="pct_delayed")
         
-        # Order weekdays
+        # Convert to the format needed for Plotly
         weekday_order = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-        df["day_of_week"] = pd.Categorical(df["day_of_week"], categories=weekday_order, ordered=True)
+        z_data = []
+        y_labels = []
         
-        # Define what is considered a delay
-        df["is_delayed"] = df["delay"] > DELAY_THRESHOLD
-        
-        # Group by station and weekday
-        heatmap_data = df.groupby(["station_name", "day_of_week"]).agg(
-            total=("delay", "count"),
-            delayed=("is_delayed", "sum")
-        ).reset_index()
-        
-        heatmap_data["pct_delayed"] = 100 * heatmap_data["delayed"] / heatmap_data["total"]
-        
-        # Pivot for heatmap
-        pivot = heatmap_data.pivot(index="station_name", columns="day_of_week", values="pct_delayed")
+        for station in available_stations:
+            y_labels.append(station)
+            station_data = []
+            for day in weekday_order:
+                try:
+                    val = pivot_data.loc[station, day]
+                    station_data.append(val)
+                except (KeyError, ValueError):
+                    # Handle missing combinations
+                    station_data.append(0)
+            z_data.append(station_data)
         
         # Create heatmap
-        fig = px.imshow(
-            pivot,
-            color_continuous_scale='RdYlGn_r',
-            labels=dict(x="Day of Week", y="Station", color="Delayed [%]"),
+        fig1 = go.Figure(data=go.Heatmap(
+            z=z_data,
+            x=weekday_order,
+            y=y_labels,
+            colorscale='RdYlGn_r',
             zmin=0,
             zmax=20,
-            text_auto='.1f'
+            text=[[f"{val:.1f}%" for val in row] for row in z_data],
+            texttemplate="%{text}",
+            textfont={"size":10},
+            hovertemplate='Station: %{y}<br>Day: %{x}<br>Delayed trains: %{text}<extra></extra>'
+        ))
+        
+        fig1.update_layout(
+            title="Percentage of Delayed Trains by Station and Day of Week",
+            template="plotly_white",
+            hoverlabel=dict(
+                bgcolor="white",
+                font_size=12,
+                font_family="Arial"
+            ),
+            title_font=dict(size=20),
+            xaxis_title="Day of Week",
+            yaxis_title="Station",
+            xaxis_title_font=dict(size=14),
+            yaxis_title_font=dict(size=14),
+            autosize=True,
+            margin=dict(l=40, r=40, t=70, b=40),
+            height=500,  # Set a fixed height
         )
         
-        # Update layout
-        fig.update_layout(
-            title=f"Percentage of Delayed Trains (>{DELAY_THRESHOLD}min) by Station and Day of Week",
-            height=300,
-            margin=dict(l=40, r=40, t=50, b=40),
-            coloraxis_colorbar=dict(title="Delayed [%]"),
-            paper_bgcolor='white',
-            font=dict(color=SBB_COLORS['text'])
-        )
+        # Get pre-aggregated data for hourly line plot
+        hourly_data = get_hourly_lineplot_data()
         
-        return dcc.Graph(figure=fig, id="day-of-week-chart")
-    except Exception as e:
-        print(f"Error creating day of week chart: {e}")
-        return html.Div("Error creating day of week chart")
-
-
-def create_time_of_day_chart(df):
-    """
-    Create a line plot showing percentage of delayed trains by hour of the day for each station.
-    
-    Args:
-        df: Prepared DataFrame
-    """
-    try:
-        # Check for required columns
-        if 'station_name' not in df.columns:
-            return html.Div("Required columns missing for time of day chart")
-        
-        # Convert arrival_planned column if it exists, otherwise look for alternatives
-        if 'scheduled_arrival' in df.columns:
-            df["scheduled_arrival"] = pd.to_datetime(df["scheduled_arrival"], errors="coerce")
-            df["hour"] = df["scheduled_arrival"].dt.hour
-        elif 'arrival_planned' in df.columns:
-            df["scheduled_arrival"] = pd.to_datetime(df["arrival_planned"], errors="coerce")
-            df["hour"] = df["scheduled_arrival"].dt.hour
-        else:
-            return html.Div("Required columns missing for time of day chart")
-        
-        # Define what is considered a delay
-        df["is_delayed"] = df["delay"] > DELAY_THRESHOLD
-        
-        # Group by hour and station
-        delay_by_hour = df.groupby(["hour", "station_name"]).agg(
-            total=("delay", "count"),
-            delayed=("is_delayed", "sum")
-        ).reset_index()
-        
-        # Calculate percentage
-        delay_by_hour["pct_delayed"] = 100 * delay_by_hour["delayed"] / delay_by_hour["total"]
-        
-        # Create line plot
-        fig = px.line(
-            delay_by_hour, 
+        # Create hourly line plot
+        fig2 = px.line(
+            hourly_data, 
             x="hour", 
             y="pct_delayed", 
             color="station_name",
             markers=True,
-            line_shape='linear',
             labels={
-                "hour": "Hour of the Day",
-                "pct_delayed": "Delayed Trains [%]",
+                "hour": "Hour of Day",
+                "pct_delayed": "Delayed Trains (%)",
                 "station_name": "Station"
-            }
+            },
+            title="Percentage of Delayed Trains by Hour of the Day",
+            color_discrete_sequence=["#4472C4", "#ED7D31", "#A5A5A5"]
         )
         
-        # Update layout
-        fig.update_layout(
-            title=f"Percentage of Delayed Trains (>{DELAY_THRESHOLD} min) by Hour of the Day",
-            xaxis_title="Hour of the Day",
-            yaxis_title="Delayed Trains [%]",
-            height=300,
-            margin=dict(l=40, r=40, t=50, b=40),
-            xaxis=dict(tickmode='linear', tick0=0, dtick=1),
-            legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5),
-            plot_bgcolor=SBB_COLORS['light_bg'],
-            paper_bgcolor='white',
-            font=dict(color=SBB_COLORS['text'])
+        fig2.update_layout(
+            template="plotly_white",
+            hoverlabel=dict(
+                bgcolor="white",
+                font_size=12,
+                font_family="Arial"
+            ),
+            title_font=dict(size=20),
+            xaxis_title_font=dict(size=14),
+            yaxis_title_font=dict(size=14),
+            autosize=True,
+            margin=dict(l=40, r=40, t=70, b=40),
+            legend_title="Station",
+            legend_title_font=dict(size=14),
+            legend_font=dict(size=12),
+            xaxis=dict(tickmode='linear', dtick=1),  # Show all hours
+            height=500,  # Set a fixed height
         )
         
-        # Add grid
-        fig.update_yaxes(showgrid=True, gridwidth=1, gridcolor='lightgray')
+        # Create available/missing stations notification
+        missing_stations = [station for station in TARGET_STATIONS_ORIGINAL if station not in available_stations]
+        station_notification = ""
+        if missing_stations:
+            station_notification = html.Div([
+                dbc.Alert(
+                    [
+                        html.Strong("Note: "), 
+                        f"Some target stations are missing from the data. Showing data for {', '.join(available_stations)}.",
+                        html.Br(),
+                        f"Missing stations: {', '.join(missing_stations)}"
+                    ],
+                    color="warning",
+                    className="mb-4"
+                )
+            ])
         
-        return dcc.Graph(figure=fig, id="time-of-day-chart")
+        # Create section with both visualizations (now in separate rows)
+        return html.Div(
+            id="time-section",
+            className="dashboard-section",
+            children=[
+                html.H2("Temporal Delay Patterns", className="section-title"),
+                html.P(
+                    "Analysis of how train delays vary by day of week and hour of day across different stations.",
+                    className="section-description"
+                ),
+                station_notification,
+                # First graph in its own row
+                dbc.Row([
+                    dbc.Col([
+                        dbc.Card(
+                            dbc.CardBody([
+                                dcc.Graph(
+                                    id='weekday-heatmap-graph',
+                                    figure=fig1,
+                                    config={'displayModeBar': True, 'responsive': True},
+                                    className="graph-container"
+                                ),
+                            ]),
+                            className="graph-card"
+                        ),
+                    ], width=12),
+                ], className="mb-4"),
+                # Second graph in its own row
+                dbc.Row([
+                    dbc.Col([
+                        dbc.Card(
+                            dbc.CardBody([
+                                dcc.Graph(
+                                    id='hourly-line-graph',
+                                    figure=fig2,
+                                    config={'displayModeBar': True, 'responsive': True},
+                                    className="graph-container"
+                                ),
+                            ]),
+                            className="graph-card"
+                        ),
+                    ], width=12),
+                ]),
+                html.Div(
+                    className="insights-container",
+                    children=[
+                        dbc.Card(
+                            dbc.CardBody([
+                                html.H4("Key Insights", className="insights-title"),
+                                html.Ul([
+                                    html.Li("Weekday delays (especially Tuesday) are higher than weekend delays"),
+                                    html.Li("Morning and evening rush hours show pronounced delay peaks"),
+                                    html.Li("Luzern experiences the most significant rush hour delay spikes"),
+                                ]),
+                            ]),
+                            className="insights-card"
+                        ),
+                    ]
+                )
+            ]
+        )
     except Exception as e:
-        print(f"Error creating time of day chart: {e}")
-        return html.Div("Error creating time of day chart")
+        logger.error(f"Error in create_time_patterns_section: {e}")
+        
+        # Fallback visualization with error message
+        return html.Div(
+            id="time-section",
+            className="dashboard-section",
+            children=[
+                html.H2("Temporal Delay Patterns", className="section-title"),
+                html.P(
+                    "Error creating temporal delay patterns visualization. Please check data integrity.",
+                    className="section-description text-danger"
+                ),
+                dbc.Alert(
+                    f"Error: {str(e)}", 
+                    color="danger",
+                    dismissable=True
+                ),
+                html.Div(
+                    f"Available stations: {', '.join(df['station_name'].unique())}",
+                    className="mt-3"
+                )
+            ]
+        )

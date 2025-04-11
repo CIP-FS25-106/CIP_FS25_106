@@ -1,22 +1,28 @@
 """
-data_processing.py - Module for loading and preparing train delay data.
-Handles the data preprocessing steps for the SBB Train Delays Dashboard.
+data_processing.py - Utility module for loading and processing train delay data
+
+This module handles downloading, concatenating, and processing the historical 
+train delay data for visualization in the dashboard.
 """
 
 import pandas as pd
 import numpy as np
-import logging
-import io
-import gzip
 import requests
-from typing import List, Dict, Optional, Tuple, Union
+import gzip
+import io
+import logging
+import os
+from typing import List, Dict, Optional, Tuple
+from datetime import datetime
+from functools import lru_cache
+from pathlib import Path
 
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler("data_processing.log"),
+        logging.FileHandler("dashboard.log"),
         logging.StreamHandler()
     ]
 )
@@ -24,390 +30,329 @@ logger = logging.getLogger(__name__)
 
 # Constants
 DELAY_THRESHOLD = 2  # Minutes threshold for considering a train delayed
-DEFAULT_STATIONS = ["Zürich HB", "Luzern", "Genève"]
+DATA_DIR = Path("./data")
+DATA_URLS = [
+    "https://res.cloudinary.com/db5dgs9zy/raw/upload/v1744315794/historical_transformed_part001.gz",
+    "https://res.cloudinary.com/db5dgs9zy/raw/upload/v1744315806/historical_transformed_part002.gz",
+    "https://res.cloudinary.com/db5dgs9zy/raw/upload/v1744315817/historical_transformed_part003.gz",
+    "https://res.cloudinary.com/db5dgs9zy/raw/upload/v1744315828/historical_transformed_part004.gz",
+    "https://res.cloudinary.com/db5dgs9zy/raw/upload/v1744315838/historical_transformed_part005.gz"
+]
 
-def load_historical_data(urls=None, urls_file=None, local_file=None):
+# Target stations to analyze - these should match exactly with the data after encoding fixes
+TARGET_STATIONS_ORIGINAL = ["Zürich HB", "Luzern", "Genève"]
+
+# Map of encoded station names to original station names
+STATION_NAME_MAP = {
+    "ZÃ¼rich HB": "Zürich HB",
+    "Zurich HB": "Zürich HB",
+    "Zürich HB": "Zürich HB",
+    "Luzern": "Luzern",
+    "GenÃ¨ve": "Genève",
+    "Geneve": "Genève",
+    "Genève": "Genève"
+}
+
+# We'll use both the original names and the encoded names
+TARGET_STATIONS = list(STATION_NAME_MAP.values())
+
+# Maximum number of rows to sample per station
+MAX_ROWS_PER_STATION = 100000
+
+
+def ensure_data_directory() -> Path:
     """
-    Load historical data from either Cloudinary URLs or a local file.
-    
-    Args:
-        urls: List of Cloudinary URLs to fetch data from
-        urls_file: JSON file containing Cloudinary URLs
-        local_file: Path to a local CSV file
+    Create a data directory if it doesn't exist.
     
     Returns:
-        pandas.DataFrame: Loaded and combined data
+        Path: Path to data directory
+    """
+    if not DATA_DIR.exists():
+        DATA_DIR.mkdir(parents=True)
+        logger.info(f"Created data directory at {DATA_DIR}")
+    
+    return DATA_DIR
+
+
+def download_and_cache_data() -> Path:
+    """
+    Download and concatenate the gzipped CSV files if not already cached.
+    
+    Returns:
+        Path: Path to the combined CSV file
+    """
+    data_dir = ensure_data_directory()
+    combined_file = data_dir / "historical_transformed_combined.csv"
+    
+    # Return the cached file if it exists
+    if combined_file.exists():
+        logger.info(f"Using cached data file: {combined_file}")
+        return combined_file
+    
+    logger.info("Downloading and combining data files...")
+    combined_df = pd.DataFrame()
+    
+    for i, url in enumerate(DATA_URLS):
+        try:
+            logger.info(f"Downloading part {i+1} of {len(DATA_URLS)}...")
+            response = requests.get(url)
+            response.raise_for_status()
+            
+            # Decompress and load into DataFrame
+            with gzip.open(io.BytesIO(response.content), 'rt', encoding='utf-8') as f:
+                part_df = pd.read_csv(f)
+                combined_df = pd.concat([combined_df, part_df], ignore_index=True)
+            
+            logger.info(f"Successfully added part {i+1}, current shape: {combined_df.shape}")
+            
+        except Exception as e:
+            logger.error(f"Error downloading or processing part {i+1}: {e}")
+            raise
+    
+    # Save the combined DataFrame to a CSV file
+    combined_df.to_csv(combined_file, index=False, encoding='utf-8')
+    logger.info(f"Combined data saved to {combined_file}")
+    
+    return combined_file
+
+
+def fix_station_names(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Fix encoding issues in station names.
+    
+    Args:
+        df: DataFrame with station names
+        
+    Returns:
+        pd.DataFrame: DataFrame with fixed station names
+    """
+    # Create a copy to avoid SettingWithCopyWarning
+    df = df.copy()
+    
+    # Map station names using the dictionary
+    df['station_name_original'] = df['station_name']
+    
+    # Function to map station names
+    def map_station_name(name):
+        return STATION_NAME_MAP.get(name, name)
+    
+    # Apply the mapping
+    df['station_name'] = df['station_name'].apply(map_station_name)
+    
+    # Log the mapping that occurred
+    # Count unique original and new station names
+    name_mapping_count = df.groupby(['station_name_original', 'station_name']).size().reset_index(name='count')
+    logger.info(f"Station name mapping statistics:\n{name_mapping_count}")
+    
+    return df
+
+
+@lru_cache(maxsize=1)
+def load_and_prepare_data() -> pd.DataFrame:
+    """
+    Load and prepare the data for visualization. Results are cached to improve performance.
+    
+    Returns:
+        pd.DataFrame: Prepared DataFrame
     """
     try:
-        if local_file:
-            logger.info(f"Loading data from local file: {local_file}")
-            df = pd.read_csv(local_file)
-            logger.info(f"Loaded {len(df)} records from local file")
-            return df
-            
-        if urls is None and urls_file:
-            try:
-                import json
-                with open(urls_file, 'r') as f:
-                    urls = json.load(f)
-                logger.info(f"Loaded {len(urls)} URLs from {urls_file}")
-            except Exception as e:
-                logger.error(f"Error loading URLs from file: {e}")
-                urls = []
+        file_path = download_and_cache_data()
+        logger.info(f"Loading data from {file_path}")
         
-        if not urls:
-            logger.error("No URLs provided for data loading")
-            return pd.DataFrame()
-            
-        # Load and combine data from all URLs
-        dfs = []
-        for i, url in enumerate(urls):
-            try:
-                logger.info(f"Fetching data from URL {i+1}/{len(urls)}")
-                response = requests.get(url)
-                response.raise_for_status()
-                
-                # Check if the file is gzipped
-                if url.endswith('.gz'):
-                    content = gzip.decompress(response.content)
-                    df_part = pd.read_csv(io.BytesIO(content))
-                else:
-                    df_part = pd.read_csv(io.BytesIO(response.content))
-                
-                dfs.append(df_part)
-                logger.info(f"Loaded {len(df_part)} records from URL {i+1}")
-            except Exception as e:
-                logger.error(f"Error loading data from URL {i+1}: {e}")
+        # Explicitly specify encoding
+        df = pd.read_csv(file_path, encoding='utf-8')
         
-        if not dfs:
-            logger.error("No data was successfully loaded")
-            return pd.DataFrame()
-            
-        # Combine all data parts
-        df = pd.concat(dfs, ignore_index=True)
-        logger.info(f"Combined data: {len(df)} records total")
+        # Log column names to help with debugging
+        logger.info(f"Columns in dataset: {df.columns.tolist()}")
         
-        # Standardize column names to match those used in the visualization functions
-        column_mapping = {
-            'DELAY': 'delay',
-            'DELAY_CAT': 'delay_category',
-            'station_name': 'station_name',
-            'train_category': 'train_category',
-            'ride_day': 'ride_day',
-            'scheduled_arrival': 'scheduled_arrival',
-            'arrival_planned': 'scheduled_arrival'
-        }
+        # Log unique station names before fixing
+        if 'station_name' in df.columns:
+            unique_stations_before = df['station_name'].unique()
+            logger.info(f"Unique station names before fixing: {unique_stations_before}")
+        else:
+            logger.error("No 'station_name' column found in the data")
+            logger.info(f"First 5 rows of data: {df.head(5)}")
+            raise ValueError("Missing 'station_name' column in the dataset")
         
-        # Rename columns if they exist
-        for old_col, new_col in column_mapping.items():
-            if old_col in df.columns and old_col != new_col:
-                df.rename(columns={old_col: new_col}, inplace=True)
+        # Fix encoding issues in station names
+        df = fix_station_names(df)
         
-        # Ensure we have delay column
-        if 'delay' not in df.columns and 'DELAY' in df.columns:
-            df.rename(columns={'DELAY': 'delay'}, inplace=True)
+        # Log unique station names after fixing
+        unique_stations_after = df['station_name'].unique()
+        logger.info(f"Unique station names after fixing: {unique_stations_after}")
+        
+        # Filter for target stations
+        df_filtered = df[df["station_name"].isin(TARGET_STATIONS)].copy()
+        logger.info(f"Filtered for stations: {TARGET_STATIONS}, {len(df_filtered)} records remaining")
+        
+        # Verify that we have at least some data for each target station
+        stations_in_filtered_data = df_filtered["station_name"].unique()
+        logger.info(f"Stations in filtered data: {stations_in_filtered_data}")
+        
+        # To improve performance, sample the data for each station
+        logger.info(f"Data size before sampling: {len(df_filtered)}")
+        sampled_df = pd.DataFrame()
+        
+        for station in stations_in_filtered_data:
+            station_data = df_filtered[df_filtered["station_name"] == station]
+            if len(station_data) > MAX_ROWS_PER_STATION:
+                # Sample with stratification by DELAY_CAT to maintain distribution
+                station_sample = station_data.groupby("DELAY_CAT", group_keys=False).apply(
+                    lambda x: x.sample(
+                        min(len(x), int(MAX_ROWS_PER_STATION * len(x) / len(station_data))),
+                        random_state=42
+                    )
+                )
+                logger.info(f"Sampled {station}: from {len(station_data)} to {len(station_sample)} records")
+            else:
+                station_sample = station_data
+                logger.info(f"Using all {len(station_data)} records for {station}")
             
-        # Create the delay_category column if it doesn't exist
-        if 'delay_category' not in df.columns and 'delay' in df.columns:
-            conditions = [
-                (df['delay'] <= DELAY_THRESHOLD),
-                (df['delay'] > DELAY_THRESHOLD) & (df['delay'] <= 5),
-                (df['delay'] > 5) & (df['delay'] <= 15),
-                (df['delay'] > 15)
-            ]
-            choices = ['On time', '2 to 5minutes', '5 to 15minutes', 'more than 15minutes']
-            df['delay_category'] = np.select(conditions, choices, default='Cancelled')
-            
-        # Make sure all necessary date columns are datetime objects
-        if 'ride_day' in df.columns:
-            df['ride_day'] = pd.to_datetime(df['ride_day'], errors='coerce')
-            
-        if 'scheduled_arrival' in df.columns:
-            df['scheduled_arrival'] = pd.to_datetime(df['scheduled_arrival'], errors='coerce')
-            
-        # Remove extreme negative delays (as done in historical_data_analysis.py)
-        if 'delay' in df.columns:
-            df_filtered = df[df['delay'] >= -500]
-            removed_count = len(df) - len(df_filtered)
-            if removed_count > 0:
-                logger.info(f"Removed {removed_count} records with extreme negative delays")
-            df = df_filtered
-            
+            sampled_df = pd.concat([sampled_df, station_sample], ignore_index=True)
+        
+        logger.info(f"Data size after sampling: {len(sampled_df)}")
+        
+        # Continue with the sampled data
+        df = sampled_df
+        
+        # Convert ride_day to datetime
+        df["ride_day"] = pd.to_datetime(df["ride_day"], errors="coerce")
+        logger.info(f"Date range: {df['ride_day'].min()} to {df['ride_day'].max()}")
+        
+        # Convert arrival planned column
+        df["scheduled_arrival"] = pd.to_datetime(df["scheduled_arrival"], errors="coerce")
+        
+        # Remove extreme negative delays
+        df = df[(df["DELAY"] >= -500)].copy()  # Use .copy() to avoid SettingWithCopyWarning
+        
+        # Add derived columns for analysis
+        df["is_delayed"] = df["DELAY"] > DELAY_THRESHOLD
+        df["day_of_week"] = df["ride_day"].dt.day_name()
+        df["hour"] = df["scheduled_arrival"].dt.hour
+        
+        # Create ordered categorical variable for day of week
+        weekday_order = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+        df["day_of_week"] = pd.Categorical(
+            df["day_of_week"], 
+            categories=weekday_order, 
+            ordered=True
+        )
+        
         return df
+        
     except Exception as e:
-        logger.error(f"Error in load_historical_data: {e}")
-        return pd.DataFrame()
+        logger.error(f"Error loading or preparing data: {e}")
+        # Add more detailed error information
+        if 'df' in locals() and isinstance(df, pd.DataFrame):
+            logger.error(f"DataFrame shape: {df.shape}")
+            logger.error(f"DataFrame columns: {df.columns.tolist()}")
+            if 'station_name' in df.columns:
+                logger.error(f"Unique station names: {df['station_name'].unique()}")
+        raise
 
 
-def filter_data(df, stations=None, categories=None, start_date=None, end_date=None):
+def get_pre_aggregated_data() -> Dict[str, pd.DataFrame]:
     """
-    Filter the data based on user-selected criteria.
+    Get pre-aggregated data for all visualizations to improve performance.
     
-    Args:
-        df: Input DataFrame
-        stations: List of station names to include
-        categories: List of train categories to include
-        start_date: Start date for filtering
-        end_date: End date for filtering
-        
     Returns:
-        pandas.DataFrame: Filtered DataFrame
+        Dict[str, pd.DataFrame]: Dictionary of pre-aggregated datasets
     """
-    try:
-        if df.empty:
-            return df
-            
-        filtered_df = df.copy()
-        
-        # Filter by station
-        if stations and 'station_name' in filtered_df.columns:
-            filtered_df = filtered_df[filtered_df['station_name'].isin(stations)]
-            logger.info(f"Filtered for stations: {stations}, {len(filtered_df)} records remaining")
-        
-        # Filter by train category
-        if categories and 'train_category' in filtered_df.columns:
-            filtered_df = filtered_df[filtered_df['train_category'].isin(categories)]
-            logger.info(f"Filtered for train categories: {categories}, {len(filtered_df)} records remaining")
-        
-        # Filter by date range
-        date_col = None
-        for col in ['ride_day', 'scheduled_arrival', 'arrival_planned']:
-            if col in filtered_df.columns:
-                date_col = col
-                break
-                
-        if date_col:
-            # Ensure the column is datetime
-            if not pd.api.types.is_datetime64_any_dtype(filtered_df[date_col]):
-                filtered_df[date_col] = pd.to_datetime(filtered_df[date_col], errors='coerce')
-            
-            # Apply date filters
-            if start_date:
-                filtered_df = filtered_df[filtered_df[date_col] >= start_date]
-                logger.info(f"Filtered for dates >= {start_date}, {len(filtered_df)} records remaining")
-                
-            if end_date:
-                filtered_df = filtered_df[filtered_df[date_col] <= end_date]
-                logger.info(f"Filtered for dates <= {end_date}, {len(filtered_df)} records remaining")
-        
-        return filtered_df
-    except Exception as e:
-        logger.error(f"Error in filter_data: {e}")
-        return df
-
-
-def calculate_delay_stats(df):
-    """
-    Calculate key statistics about train delays.
+    df = load_and_prepare_data()
     
-    Args:
-        df: Input DataFrame
-        
-    Returns:
-        dict: Dictionary containing calculated statistics
-    """
-    try:
-        if df.empty:
-            return {
-                'total_trains': 0,
-                'avg_delay': 0.0,
-                'pct_on_time': 0.0,
-                'pct_delayed': 0.0
-            }
-            
-        delay_col = 'delay' if 'delay' in df.columns else 'DELAY'
-        
-        # Make sure we have the column
-        if delay_col not in df.columns:
-            return {
-                'total_trains': len(df),
-                'avg_delay': 0.0,
-                'pct_on_time': 0.0,
-                'pct_delayed': 0.0
-            }
-            
-        # Calculate statistics
-        total_trains = len(df)
-        avg_delay = df[delay_col].mean()
-        
-        # Count on-time and delayed trains
-        if 'delay_category' in df.columns:
-            on_time_count = len(df[df['delay_category'] == 'On time'])
-        else:
-            on_time_count = len(df[df[delay_col] <= DELAY_THRESHOLD])
-            
-        delayed_count = total_trains - on_time_count
-        
-        # Calculate percentages
-        pct_on_time = 100 * on_time_count / total_trains if total_trains > 0 else 0
-        pct_delayed = 100 * delayed_count / total_trains if total_trains > 0 else 0
-        
-        return {
-            'total_trains': total_trains,
-            'avg_delay': avg_delay,
-            'pct_on_time': pct_on_time,
-            'pct_delayed': pct_delayed
-        }
-    except Exception as e:
-        logger.error(f"Error in calculate_delay_stats: {e}")
-        return {
-            'total_trains': 0,
-            'avg_delay': 0.0,
-            'pct_on_time': 0.0,
-            'pct_delayed': 0.0
-        }
-
-
-def get_delay_by_time(df, by='hour'):
-    """
-    Calculate delay statistics by time (hour or day of week).
+    result = {}
     
-    Args:
-        df: Input DataFrame
-        by: 'hour' or 'day_of_week' - how to group the data
-        
-    Returns:
-        pandas.DataFrame: DataFrame with delay statistics by time
-    """
-    try:
-        if df.empty:
-            return pd.DataFrame()
-            
-        # Make sure we have the necessary columns
-        delay_col = 'delay' if 'delay' in df.columns else 'DELAY'
-        if delay_col not in df.columns:
-            return pd.DataFrame()
-            
-        time_df = df.copy()
-        
-        # Create time columns if needed
-        if by == 'hour':
-            for col in ['scheduled_arrival', 'arrival_planned']:
-                if col in time_df.columns:
-                    time_df['hour'] = pd.to_datetime(time_df[col]).dt.hour
-                    break
-                    
-            if 'hour' not in time_df.columns:
-                return pd.DataFrame()
-                
-            group_col = 'hour'
-        else:  # day_of_week
-            for col in ['ride_day', 'scheduled_arrival', 'arrival_planned']:
-                if col in time_df.columns:
-                    time_df['day_of_week'] = pd.to_datetime(time_df[col]).dt.day_name()
-                    break
-                    
-            if 'day_of_week' not in time_df.columns:
-                return pd.DataFrame()
-                
-            # Order the days of the week
-            weekday_order = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-            time_df['day_of_week'] = pd.Categorical(time_df['day_of_week'], categories=weekday_order, ordered=True)
-            
-            group_col = 'day_of_week'
-        
-        # Define delayed trains
-        time_df['is_delayed'] = time_df[delay_col] > DELAY_THRESHOLD
-        
-        # Group and calculate statistics
-        if 'station_name' in time_df.columns:
-            delay_by_time = time_df.groupby([group_col, 'station_name']).agg(
-                total=('is_delayed', 'count'),
-                delayed=('is_delayed', 'sum')
-            ).reset_index()
-        else:
-            delay_by_time = time_df.groupby([group_col]).agg(
-                total=('is_delayed', 'count'),
-                delayed=('is_delayed', 'sum')
-            ).reset_index()
-        
-        # Calculate percentage
-        delay_by_time['pct_delayed'] = 100 * delay_by_time['delayed'] / delay_by_time['total']
-        
-        return delay_by_time
-    except Exception as e:
-        logger.error(f"Error in get_delay_by_time: {e}")
-        return pd.DataFrame()
-
-
-def get_delay_by_station_and_category(df):
-    """
-    Calculate average delay by station and train category.
+    # Pre-aggregate data for delay categories visualization
+    result["delay_categories"] = df.groupby(["station_name", "DELAY_CAT"], observed=True).size().reset_index(name="count")
     
-    Args:
-        df: Input DataFrame
-        
-    Returns:
-        pandas.DataFrame: DataFrame with delay statistics by station and category
-    """
-    try:
-        if df.empty:
-            return pd.DataFrame()
-            
-        # Make sure we have the necessary columns
-        delay_col = 'delay' if 'delay' in df.columns else 'DELAY'
-        if delay_col not in df.columns or 'station_name' not in df.columns or 'train_category' not in df.columns:
-            return pd.DataFrame()
-            
-        # Calculate average delay by station and category
-        avg_delay = df.groupby(['station_name', 'train_category'])[delay_col].agg(['mean', 'count']).reset_index()
-        avg_delay.columns = ['station_name', 'train_category', 'avg_delay', 'count']
-        
-        return avg_delay
-    except Exception as e:
-        logger.error(f"Error in get_delay_by_station_and_category: {e}")
-        return pd.DataFrame()
-
-
-def get_delay_categories_distribution(df):
-    """
-    Calculate the distribution of trains across delay categories.
+    # Pre-aggregate data for train categories visualization
+    result["train_categories"] = df.groupby("train_category", observed=True)["DELAY"].mean().reset_index()
     
-    Args:
-        df: Input DataFrame
-        
-    Returns:
-        pandas.DataFrame: DataFrame with counts and percentages for each delay category
+    # Pre-aggregate data for weekday heatmap
+    result["weekday_heatmap"] = df.groupby(["station_name", "day_of_week"], observed=True).agg(
+        total=("DELAY", "count"),
+        delayed=("is_delayed", "sum")
+    ).reset_index()
+    result["weekday_heatmap"]["pct_delayed"] = 100 * result["weekday_heatmap"]["delayed"] / result["weekday_heatmap"]["total"]
+    
+    # Pre-aggregate data for hourly lineplot
+    result["hourly_lineplot"] = df.groupby(["hour", "station_name"], observed=True).agg(
+        total=("DELAY", "count"),
+        delayed=("is_delayed", "sum")
+    ).reset_index()
+    result["hourly_lineplot"]["pct_delayed"] = 100 * result["hourly_lineplot"]["delayed"] / result["hourly_lineplot"]["total"]
+    
+    # Pre-aggregate data for station summary
+    result["station_summary"] = df.groupby("station_name", observed=True).agg(
+        avg_delay=("DELAY", "mean"),
+        total_trains=("DELAY", "count"),
+        delayed_trains=("is_delayed", "sum")
+    ).reset_index()
+    result["station_summary"]["pct_delayed"] = 100 * result["station_summary"]["delayed_trains"] / result["station_summary"]["total_trains"]
+    
+    return result
+
+
+def get_delay_category_data() -> pd.DataFrame:
     """
-    try:
-        if df.empty:
-            return pd.DataFrame()
-            
-        # Check if we have delay_category column
-        if 'delay_category' in df.columns:
-            delay_cat_col = 'delay_category'
-        elif 'DELAY_CAT' in df.columns:
-            delay_cat_col = 'DELAY_CAT'
-        else:
-            # Create delay category based on delay
-            delay_col = 'delay' if 'delay' in df.columns else 'DELAY'
-            if delay_col not in df.columns:
-                return pd.DataFrame()
-                
-            conditions = [
-                (df[delay_col] <= DELAY_THRESHOLD),
-                (df[delay_col] > DELAY_THRESHOLD) & (df[delay_col] <= 5),
-                (df[delay_col] > 5) & (df[delay_col] <= 15),
-                (df[delay_col] > 15)
-            ]
-            choices = ['On time', '2 to 5minutes', '5 to 15minutes', 'more than 15minutes']
-            df['delay_category'] = np.select(conditions, choices, default='Cancelled')
-            delay_cat_col = 'delay_category'
-        
-        # Count occurrences for each category
-        category_counts = df[delay_cat_col].value_counts().reset_index()
-        category_counts.columns = ['category', 'count']
-        
-        # Calculate percentages
-        total = category_counts['count'].sum()
-        category_counts['percentage'] = 100 * category_counts['count'] / total if total > 0 else 0
-        
-        # Ensure categories are in expected order
-        category_order = ["On time", "2 to 5minutes", "5 to 15minutes", "more than 15minutes", "Cancelled"]
-        category_counts['category'] = pd.Categorical(category_counts['category'], categories=category_order, ordered=True)
-        category_counts = category_counts.sort_values('category')
-        
-        return category_counts
-    except Exception as e:
-        logger.error(f"Error in get_delay_categories_distribution: {e}")
-        return pd.DataFrame()
+    Process data for the delay category visualizations.
+    
+    Returns:
+        pd.DataFrame: Processed data for visualization
+    """
+    aggregated_data = get_pre_aggregated_data()
+    counts = aggregated_data["delay_categories"]
+    
+    # Calculate percentages
+    totals = counts.groupby("station_name", observed=True)["count"].sum().reset_index(name="total")
+    counts = counts.merge(totals, on="station_name")
+    counts["percentage"] = 100 * counts["count"] / counts["total"]
+    
+    return counts
+
+
+def get_category_delay_data() -> pd.DataFrame:
+    """
+    Process data for the train category delay visualizations.
+    
+    Returns:
+        pd.DataFrame: Processed data for visualization
+    """
+    aggregated_data = get_pre_aggregated_data()
+    avg_by_category = aggregated_data["train_categories"]
+    avg_by_category = avg_by_category.sort_values(by="DELAY", ascending=False)
+    
+    return avg_by_category
+
+
+def get_bubble_chart_data() -> pd.DataFrame:
+    """
+    Process data for the bubble chart visualization.
+    
+    Returns:
+        pd.DataFrame: Processed data for visualization
+    """
+    aggregated_data = get_pre_aggregated_data()
+    return aggregated_data["station_summary"]
+
+
+def get_weekday_heatmap_data() -> pd.DataFrame:
+    """
+    Process data for the weekday heatmap visualization.
+    
+    Returns:
+        pd.DataFrame: Processed data for visualization
+    """
+    aggregated_data = get_pre_aggregated_data()
+    return aggregated_data["weekday_heatmap"]
+
+
+def get_hourly_lineplot_data() -> pd.DataFrame:
+    """
+    Process data for the hourly line plot visualization.
+    
+    Returns:
+        pd.DataFrame: Processed data for visualization
+    """
+    aggregated_data = get_pre_aggregated_data()
+    return aggregated_data["hourly_lineplot"]
