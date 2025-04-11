@@ -17,7 +17,7 @@ import traceback
 from pathlib import Path
 
 # Import components and utilities
-from components.header import create_header
+from sbb_delays_dashboard.components.header import create_header
 from sbb_delays_dashboard.components.visualizations import (
     create_delay_distribution_section,
     create_category_delay_section,
@@ -314,4 +314,4 @@ def retry_loading(n_clicks):
 # Run the app
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 8050))
-    app.run(host='0.0.0.0', port=port, debug=False)  # Set debug=False for production
+    app.run(host='0.0.0.0', port=port, debug=False)  
