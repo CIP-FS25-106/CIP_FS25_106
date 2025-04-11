@@ -31,3 +31,6 @@ dash
 dash-bootstrap-components
 plotly
 gunicorn
+
+# Cloudinary
+cloudinary==1.43.0
