@@ -12,10 +12,14 @@ import gzip
 import io
 import logging
 import os
+import warnings
 from typing import List, Dict, Optional, Tuple, Iterator
 from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
+
+# Suppress pandas FutureWarnings about observed parameter
+warnings.filterwarnings("ignore", category=FutureWarning, module="pandas")
 
 # Configure logging
 logging.basicConfig(
@@ -194,7 +198,7 @@ def incrementally_aggregate_data(
         }
     
     # Update delay categories aggregation
-    delay_cat_counts = chunk.groupby(["station_name", "DELAY_CAT"]).size().reset_index(name="count")
+    delay_cat_counts = chunk.groupby(["station_name", "DELAY_CAT"], observed=True).size().reset_index(name="count")
     for _, row in delay_cat_counts.iterrows():
         key = (row["station_name"], row["DELAY_CAT"])
         if key in aggregations["delay_categories"]:
@@ -203,7 +207,7 @@ def incrementally_aggregate_data(
             aggregations["delay_categories"][key] = row["count"]
     
     # Update train categories aggregation
-    train_cat_groups = chunk.groupby("train_category")
+    train_cat_groups = chunk.groupby("train_category", observed=True)
     for cat, group in train_cat_groups:
         if cat in aggregations["train_categories"]:
             aggregations["train_categories"][cat]["sum"] += group["DELAY"].sum()
@@ -215,7 +219,7 @@ def incrementally_aggregate_data(
             }
     
     # Update weekday heatmap aggregation
-    weekday_groups = chunk.groupby(["station_name", "day_of_week"])
+    weekday_groups = chunk.groupby(["station_name", "day_of_week"], observed=True)
     for key, group in weekday_groups:
         if key in aggregations["weekday_heatmap"]:
             aggregations["weekday_heatmap"][key]["total"] += len(group)
@@ -227,7 +231,7 @@ def incrementally_aggregate_data(
             }
     
     # Update hourly lineplot aggregation
-    hourly_groups = chunk.groupby(["hour", "station_name"])
+    hourly_groups = chunk.groupby(["hour", "station_name"], observed=True)
     for key, group in hourly_groups:
         if key in aggregations["hourly_lineplot"]:
             aggregations["hourly_lineplot"][key]["total"] += len(group)
@@ -239,7 +243,7 @@ def incrementally_aggregate_data(
             }
     
     # Update station summary aggregation
-    station_groups = chunk.groupby("station_name")
+    station_groups = chunk.groupby("station_name", observed=True)
     for station, group in station_groups:
         if station in aggregations["station_summary"]:
             aggregations["station_summary"][station]["delay_sum"] += group["DELAY"].sum()
@@ -370,6 +374,10 @@ def stream_and_process_data() -> Tuple[pd.DataFrame, Dict[str, pd.DataFrame]]:
     # For incremental aggregation
     aggregations = {}
     
+    # Set pandas option to suppress warnings explicitly within this function as well
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", category=FutureWarning, module="pandas")
+    
     try:
         # Process each data URL
         for url_idx, url in enumerate(DATA_URLS):
@@ -395,7 +403,7 @@ def stream_and_process_data() -> Tuple[pd.DataFrame, Dict[str, pd.DataFrame]]:
                         # If we have more than maximum rows, sample to maintain distribution
                         if len(combined) > MAX_ROWS_PER_STATION:
                             # Maintain distribution by delay category
-                            station_samples[station] = combined.groupby("DELAY_CAT", group_keys=False).apply(
+                            station_samples[station] = combined.groupby("DELAY_CAT", observed=True, group_keys=False).apply(
                                 lambda x: x.sample(
                                     min(len(x), int(MAX_ROWS_PER_STATION * len(x) / len(combined))),
                                     random_state=42
@@ -436,6 +444,10 @@ def load_and_prepare_data() -> pd.DataFrame:
         pd.DataFrame: Prepared DataFrame (sample for visualizations)
     """
     try:
+        # Set pandas option to suppress warnings about observed parameter
+        import warnings
+        warnings.filterwarnings("ignore", category=FutureWarning, module="pandas")
+        
         # Process data streams and get the sample DataFrame and aggregations
         sample_df, _ = stream_and_process_data()
         

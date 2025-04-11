@@ -17,7 +17,7 @@ import traceback
 from pathlib import Path
 
 # Import components and utilities
-from sbb_delays_dashboard.components.header import create_header
+from components.header import create_header
 from sbb_delays_dashboard.components.visualizations import (
     create_delay_distribution_section,
     create_category_delay_section,
