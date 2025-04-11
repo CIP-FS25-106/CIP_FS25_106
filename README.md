@@ -105,8 +105,22 @@ CIP_FS25_106/
 ├── drivers/
 │   └── chromedriver.exe  # For Selenium-based web scraping
 ├── notebooks/
+├──sbb_delays_dashboard/
+│  ├── app.py                 
+|  ├── assets/                 
+│  │   └── style.css           
+│  ├── components/            
+│  │   ├── __init__.py
+│  │   ├── header.py          
+│  │   └── visualizations.py   
+│  ├── data/                  
+│  │   └── historical_transformed.csv 
+│  ├── utils/                  
+│  │   ├── __init__.py
+│  │   └── data_processing.py 
 └── requirements.txt
 ```
+
 
 ## Historical Data Pipeline
 

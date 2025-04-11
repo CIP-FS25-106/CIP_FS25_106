@@ -42,9 +42,15 @@ def create_header():
         ]
     )
 
-def create_filter_bar(available_stations, available_categories):
+def create_filter_bar(available_stations, available_categories, default_start_date=None, default_end_date=None):
     """
     Creates a filter bar for interactive data filtering
+    
+    Args:
+        available_stations: List of available station names
+        available_categories: List of available train categories
+        default_start_date: Default start date for the date picker (optional)
+        default_end_date: Default end date for the date picker (optional)
     """
     return html.Div(
         className="filter-bar",
@@ -87,6 +93,8 @@ def create_filter_bar(available_stations, available_categories):
                             html.Label("Date Range:"),
                             dcc.DatePickerRange(
                                 id="date-range-filter",
+                                start_date=default_start_date,
+                                end_date=default_end_date,
                                 start_date_placeholder_text="Start Date",
                                 end_date_placeholder_text="End Date",
                                 calendar_orientation="horizontal"
