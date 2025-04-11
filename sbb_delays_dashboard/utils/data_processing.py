@@ -1,8 +1,8 @@
 """
 data_processing.py - Utility module for loading and processing train delay data
 
-This module handles downloading, concatenating, and processing the historical 
-train delay data for visualization in the dashboard.
+This module handles streaming and processing the historical train delay data
+for visualization in the dashboard, optimized for memory-constrained environments.
 """
 
 import pandas as pd
@@ -12,7 +12,7 @@ import gzip
 import io
 import logging
 import os
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional, Tuple, Iterator
 from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
@@ -30,7 +30,6 @@ logger = logging.getLogger(__name__)
 
 # Constants
 DELAY_THRESHOLD = 2  # Minutes threshold for considering a train delayed
-DATA_DIR = Path("./data")
 DATA_URLS = [
     "https://res.cloudinary.com/db5dgs9zy/raw/upload/v1744315794/historical_transformed_part001.gz",
     "https://res.cloudinary.com/db5dgs9zy/raw/upload/v1744315806/historical_transformed_part002.gz",
@@ -56,64 +55,50 @@ STATION_NAME_MAP = {
 # We'll use both the original names and the encoded names
 TARGET_STATIONS = list(STATION_NAME_MAP.values())
 
-# Maximum number of rows to sample per station
-MAX_ROWS_PER_STATION = 100000
+# Maximum number of rows to process per station for memory efficiency
+MAX_ROWS_PER_STATION = 50000
+
+# Pre-aggregated data cache (in-memory)
+_AGGREGATED_DATA_CACHE = {}
 
 
-def ensure_data_directory() -> Path:
+def stream_data_in_chunks(url: str, chunksize: int = 10000) -> Iterator[pd.DataFrame]:
     """
-    Create a data directory if it doesn't exist.
+    Stream data from URL in chunks to avoid loading entire file into memory.
     
-    Returns:
-        Path: Path to data directory
+    Args:
+        url: URL to gzipped CSV file
+        chunksize: Number of rows per chunk
+        
+    Yields:
+        pd.DataFrame: Chunk of data
     """
-    if not DATA_DIR.exists():
-        DATA_DIR.mkdir(parents=True)
-        logger.info(f"Created data directory at {DATA_DIR}")
-    
-    return DATA_DIR
-
-
-def download_and_cache_data() -> Path:
-    """
-    Download and concatenate the gzipped CSV files if not already cached.
-    
-    Returns:
-        Path: Path to the combined CSV file
-    """
-    data_dir = ensure_data_directory()
-    combined_file = data_dir / "historical_transformed_combined.csv"
-    
-    # Return the cached file if it exists
-    if combined_file.exists():
-        logger.info(f"Using cached data file: {combined_file}")
-        return combined_file
-    
-    logger.info("Downloading and combining data files...")
-    combined_df = pd.DataFrame()
-    
-    for i, url in enumerate(DATA_URLS):
-        try:
-            logger.info(f"Downloading part {i+1} of {len(DATA_URLS)}...")
-            response = requests.get(url)
-            response.raise_for_status()
-            
-            # Decompress and load into DataFrame
-            with gzip.open(io.BytesIO(response.content), 'rt', encoding='utf-8') as f:
-                part_df = pd.read_csv(f)
-                combined_df = pd.concat([combined_df, part_df], ignore_index=True)
-            
-            logger.info(f"Successfully added part {i+1}, current shape: {combined_df.shape}")
-            
-        except Exception as e:
-            logger.error(f"Error downloading or processing part {i+1}: {e}")
-            raise
-    
-    # Save the combined DataFrame to a CSV file
-    combined_df.to_csv(combined_file, index=False, encoding='utf-8')
-    logger.info(f"Combined data saved to {combined_file}")
-    
-    return combined_file
+    try:
+        logger.info(f"Streaming data from {url}")
+        response = requests.get(url, stream=True)
+        response.raise_for_status()
+        
+        # Create a streaming decompression object
+        with gzip.open(io.BytesIO(response.content), 'rt', encoding='utf-8') as f:
+            # Stream chunks from the CSV
+            for chunk in pd.read_csv(f, chunksize=chunksize):
+                # Immediately filter for target stations to reduce memory usage
+                chunk_filtered = chunk[
+                    chunk["station_name"].apply(
+                        lambda x: any(target in str(x) for target in TARGET_STATIONS_ORIGINAL)
+                    )
+                ].copy()
+                
+                if not chunk_filtered.empty:
+                    # Fix encoding issues in station names
+                    chunk_filtered = fix_station_names(chunk_filtered)
+                    # Only yield if there's data matching our criteria
+                    if not chunk_filtered[chunk_filtered["station_name"].isin(TARGET_STATIONS)].empty:
+                        yield chunk_filtered
+                        
+    except Exception as e:
+        logger.error(f"Error streaming data from {url}: {e}")
+        raise
 
 
 def fix_station_names(df: pd.DataFrame) -> pd.DataFrame:
@@ -139,12 +124,307 @@ def fix_station_names(df: pd.DataFrame) -> pd.DataFrame:
     # Apply the mapping
     df['station_name'] = df['station_name'].apply(map_station_name)
     
-    # Log the mapping that occurred
-    # Count unique original and new station names
-    name_mapping_count = df.groupby(['station_name_original', 'station_name']).size().reset_index(name='count')
-    logger.info(f"Station name mapping statistics:\n{name_mapping_count}")
-    
     return df
+
+
+def process_chunk(chunk: pd.DataFrame) -> pd.DataFrame:
+    """
+    Process a chunk of data with necessary transformations.
+    
+    Args:
+        chunk: DataFrame chunk to process
+        
+    Returns:
+        pd.DataFrame: Processed chunk
+    """
+    # Filter for target stations
+    chunk_filtered = chunk[chunk["station_name"].isin(TARGET_STATIONS)].copy()
+    
+    if chunk_filtered.empty:
+        return pd.DataFrame()
+    
+    # Convert date columns
+    chunk_filtered["ride_day"] = pd.to_datetime(chunk_filtered["ride_day"], errors="coerce")
+    chunk_filtered["scheduled_arrival"] = pd.to_datetime(chunk_filtered["scheduled_arrival"], errors="coerce")
+    
+    # Remove extreme negative delays
+    chunk_filtered = chunk_filtered[(chunk_filtered["DELAY"] >= -500)]
+    
+    # Add derived columns for analysis
+    chunk_filtered["is_delayed"] = chunk_filtered["DELAY"] > DELAY_THRESHOLD
+    chunk_filtered["day_of_week"] = chunk_filtered["ride_day"].dt.day_name()
+    chunk_filtered["hour"] = chunk_filtered["scheduled_arrival"].dt.hour
+    
+    # Create ordered categorical variable for day of week
+    weekday_order = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    chunk_filtered["day_of_week"] = pd.Categorical(
+        chunk_filtered["day_of_week"], 
+        categories=weekday_order, 
+        ordered=True
+    )
+    
+    return chunk_filtered
+
+
+def incrementally_aggregate_data(
+    chunk: pd.DataFrame, 
+    aggregations: Dict
+) -> Dict:
+    """
+    Incrementally aggregate data from chunks.
+    
+    Args:
+        chunk: DataFrame chunk to aggregate
+        aggregations: Current aggregation state
+        
+    Returns:
+        Dict: Updated aggregation state
+    """
+    if chunk.empty:
+        return aggregations
+    
+    # Initialize aggregations dictionary if not already done
+    if not aggregations:
+        aggregations = {
+            "delay_categories": {},
+            "train_categories": {},
+            "weekday_heatmap": {},
+            "hourly_lineplot": {},
+            "station_summary": {}
+        }
+    
+    # Update delay categories aggregation
+    delay_cat_counts = chunk.groupby(["station_name", "DELAY_CAT"]).size().reset_index(name="count")
+    for _, row in delay_cat_counts.iterrows():
+        key = (row["station_name"], row["DELAY_CAT"])
+        if key in aggregations["delay_categories"]:
+            aggregations["delay_categories"][key] += row["count"]
+        else:
+            aggregations["delay_categories"][key] = row["count"]
+    
+    # Update train categories aggregation
+    train_cat_groups = chunk.groupby("train_category")
+    for cat, group in train_cat_groups:
+        if cat in aggregations["train_categories"]:
+            aggregations["train_categories"][cat]["sum"] += group["DELAY"].sum()
+            aggregations["train_categories"][cat]["count"] += len(group)
+        else:
+            aggregations["train_categories"][cat] = {
+                "sum": group["DELAY"].sum(),
+                "count": len(group)
+            }
+    
+    # Update weekday heatmap aggregation
+    weekday_groups = chunk.groupby(["station_name", "day_of_week"])
+    for key, group in weekday_groups:
+        if key in aggregations["weekday_heatmap"]:
+            aggregations["weekday_heatmap"][key]["total"] += len(group)
+            aggregations["weekday_heatmap"][key]["delayed"] += group["is_delayed"].sum()
+        else:
+            aggregations["weekday_heatmap"][key] = {
+                "total": len(group),
+                "delayed": group["is_delayed"].sum()
+            }
+    
+    # Update hourly lineplot aggregation
+    hourly_groups = chunk.groupby(["hour", "station_name"])
+    for key, group in hourly_groups:
+        if key in aggregations["hourly_lineplot"]:
+            aggregations["hourly_lineplot"][key]["total"] += len(group)
+            aggregations["hourly_lineplot"][key]["delayed"] += group["is_delayed"].sum()
+        else:
+            aggregations["hourly_lineplot"][key] = {
+                "total": len(group),
+                "delayed": group["is_delayed"].sum()
+            }
+    
+    # Update station summary aggregation
+    station_groups = chunk.groupby("station_name")
+    for station, group in station_groups:
+        if station in aggregations["station_summary"]:
+            aggregations["station_summary"][station]["delay_sum"] += group["DELAY"].sum()
+            aggregations["station_summary"][station]["total_trains"] += len(group)
+            aggregations["station_summary"][station]["delayed_trains"] += group["is_delayed"].sum()
+        else:
+            aggregations["station_summary"][station] = {
+                "delay_sum": group["DELAY"].sum(),
+                "total_trains": len(group),
+                "delayed_trains": group["is_delayed"].sum()
+            }
+    
+    return aggregations
+
+
+def finalize_aggregations(aggregations: Dict) -> Dict[str, pd.DataFrame]:
+    """
+    Convert aggregation dictionaries to DataFrames.
+    
+    Args:
+        aggregations: Aggregation state dictionary
+        
+    Returns:
+        Dict[str, pd.DataFrame]: Dictionary of final aggregated DataFrames
+    """
+    result = {}
+    
+    # Finalize delay categories
+    delay_cat_data = []
+    station_totals = {}
+    
+    for (station, delay_cat), count in aggregations["delay_categories"].items():
+        delay_cat_data.append({
+            "station_name": station,
+            "DELAY_CAT": delay_cat,
+            "count": count
+        })
+        
+        if station in station_totals:
+            station_totals[station] += count
+        else:
+            station_totals[station] = count
+    
+    delay_cats_df = pd.DataFrame(delay_cat_data)
+    
+    if not delay_cats_df.empty:
+        # Add total and percentage columns
+        delay_cats_df["total"] = delay_cats_df["station_name"].map(station_totals)
+        delay_cats_df["percentage"] = 100 * delay_cats_df["count"] / delay_cats_df["total"]
+        result["delay_categories"] = delay_cats_df
+    else:
+        result["delay_categories"] = pd.DataFrame(columns=["station_name", "DELAY_CAT", "count", "total", "percentage"])
+    
+    # Finalize train categories
+    train_cat_data = []
+    
+    for cat, values in aggregations["train_categories"].items():
+        avg_delay = values["sum"] / values["count"] if values["count"] > 0 else 0
+        train_cat_data.append({
+            "train_category": cat,
+            "DELAY": avg_delay
+        })
+    
+    result["train_categories"] = pd.DataFrame(train_cat_data).sort_values(by="DELAY", ascending=False)
+    
+    # Finalize weekday heatmap
+    weekday_data = []
+    
+    for (station, day), values in aggregations["weekday_heatmap"].items():
+        pct_delayed = 100 * values["delayed"] / values["total"] if values["total"] > 0 else 0
+        weekday_data.append({
+            "station_name": station,
+            "day_of_week": day,
+            "total": values["total"],
+            "delayed": values["delayed"],
+            "pct_delayed": pct_delayed
+        })
+    
+    result["weekday_heatmap"] = pd.DataFrame(weekday_data)
+    
+    # Finalize hourly lineplot
+    hourly_data = []
+    
+    for (hour, station), values in aggregations["hourly_lineplot"].items():
+        pct_delayed = 100 * values["delayed"] / values["total"] if values["total"] > 0 else 0
+        hourly_data.append({
+            "hour": hour,
+            "station_name": station,
+            "total": values["total"],
+            "delayed": values["delayed"],
+            "pct_delayed": pct_delayed
+        })
+    
+    result["hourly_lineplot"] = pd.DataFrame(hourly_data)
+    
+    # Finalize station summary
+    station_data = []
+    
+    for station, values in aggregations["station_summary"].items():
+        avg_delay = values["delay_sum"] / values["total_trains"] if values["total_trains"] > 0 else 0
+        pct_delayed = 100 * values["delayed_trains"] / values["total_trains"] if values["total_trains"] > 0 else 0
+        station_data.append({
+            "station_name": station,
+            "avg_delay": avg_delay,
+            "total_trains": values["total_trains"],
+            "delayed_trains": values["delayed_trains"],
+            "pct_delayed": pct_delayed
+        })
+    
+    result["station_summary"] = pd.DataFrame(station_data)
+    
+    return result
+
+
+def stream_and_process_data() -> Tuple[pd.DataFrame, Dict[str, pd.DataFrame]]:
+    """
+    Stream and process data incrementally, without storing to disk.
+    
+    Returns:
+        Tuple[pd.DataFrame, Dict[str, pd.DataFrame]]: Sample DataFrame for visualizations and aggregated data
+    """
+    logger.info("Stream processing train delay data...")
+    
+    # For storing a representative sample
+    sample_df = pd.DataFrame()
+    station_samples = {station: pd.DataFrame() for station in TARGET_STATIONS}
+    
+    # For incremental aggregation
+    aggregations = {}
+    
+    try:
+        # Process each data URL
+        for url_idx, url in enumerate(DATA_URLS):
+            logger.info(f"Processing URL {url_idx+1}/{len(DATA_URLS)}: {url}")
+            
+            # Stream and process chunks
+            for chunk_idx, chunk in enumerate(stream_data_in_chunks(url)):
+                processed_chunk = process_chunk(chunk)
+                
+                if processed_chunk.empty:
+                    continue
+                
+                # Update aggregations
+                aggregations = incrementally_aggregate_data(processed_chunk, aggregations)
+                
+                # Update station samples
+                for station in TARGET_STATIONS:
+                    station_chunk = processed_chunk[processed_chunk["station_name"] == station]
+                    if not station_chunk.empty:
+                        current_sample = station_samples[station]
+                        combined = pd.concat([current_sample, station_chunk])
+                        
+                        # If we have more than maximum rows, sample to maintain distribution
+                        if len(combined) > MAX_ROWS_PER_STATION:
+                            # Maintain distribution by delay category
+                            station_samples[station] = combined.groupby("DELAY_CAT", group_keys=False).apply(
+                                lambda x: x.sample(
+                                    min(len(x), int(MAX_ROWS_PER_STATION * len(x) / len(combined))),
+                                    random_state=42
+                                )
+                            )
+                        else:
+                            station_samples[station] = combined
+                
+                # Log progress
+                if chunk_idx % 10 == 0:
+                    logger.info(f"Processed {chunk_idx+1} chunks from URL {url_idx+1}")
+        
+        # Combine station samples into final sample DataFrame
+        sample_df = pd.concat([df for df in station_samples.values()])
+        
+        # Finalize aggregations
+        final_aggregations = finalize_aggregations(aggregations)
+        
+        logger.info(f"Completed stream processing with {len(sample_df)} sample rows")
+        
+        # Store in cache
+        global _AGGREGATED_DATA_CACHE
+        _AGGREGATED_DATA_CACHE = final_aggregations
+        
+        return sample_df, final_aggregations
+        
+    except Exception as e:
+        logger.error(f"Error in stream_and_process_data: {e}")
+        raise
 
 
 @lru_cache(maxsize=1)
@@ -153,101 +433,21 @@ def load_and_prepare_data() -> pd.DataFrame:
     Load and prepare the data for visualization. Results are cached to improve performance.
     
     Returns:
-        pd.DataFrame: Prepared DataFrame
+        pd.DataFrame: Prepared DataFrame (sample for visualizations)
     """
     try:
-        file_path = download_and_cache_data()
-        logger.info(f"Loading data from {file_path}")
+        # Process data streams and get the sample DataFrame and aggregations
+        sample_df, _ = stream_and_process_data()
         
-        # Explicitly specify encoding
-        df = pd.read_csv(file_path, encoding='utf-8')
+        # Log sample information
+        logger.info(f"Sample data shape: {sample_df.shape}")
+        stations_in_sample = sample_df["station_name"].unique()
+        logger.info(f"Stations in sample data: {stations_in_sample}")
         
-        # Log column names to help with debugging
-        logger.info(f"Columns in dataset: {df.columns.tolist()}")
-        
-        # Log unique station names before fixing
-        if 'station_name' in df.columns:
-            unique_stations_before = df['station_name'].unique()
-            logger.info(f"Unique station names before fixing: {unique_stations_before}")
-        else:
-            logger.error("No 'station_name' column found in the data")
-            logger.info(f"First 5 rows of data: {df.head(5)}")
-            raise ValueError("Missing 'station_name' column in the dataset")
-        
-        # Fix encoding issues in station names
-        df = fix_station_names(df)
-        
-        # Log unique station names after fixing
-        unique_stations_after = df['station_name'].unique()
-        logger.info(f"Unique station names after fixing: {unique_stations_after}")
-        
-        # Filter for target stations
-        df_filtered = df[df["station_name"].isin(TARGET_STATIONS)].copy()
-        logger.info(f"Filtered for stations: {TARGET_STATIONS}, {len(df_filtered)} records remaining")
-        
-        # Verify that we have at least some data for each target station
-        stations_in_filtered_data = df_filtered["station_name"].unique()
-        logger.info(f"Stations in filtered data: {stations_in_filtered_data}")
-        
-        # To improve performance, sample the data for each station
-        logger.info(f"Data size before sampling: {len(df_filtered)}")
-        sampled_df = pd.DataFrame()
-        
-        for station in stations_in_filtered_data:
-            station_data = df_filtered[df_filtered["station_name"] == station]
-            if len(station_data) > MAX_ROWS_PER_STATION:
-                # Sample with stratification by DELAY_CAT to maintain distribution
-                station_sample = station_data.groupby("DELAY_CAT", group_keys=False).apply(
-                    lambda x: x.sample(
-                        min(len(x), int(MAX_ROWS_PER_STATION * len(x) / len(station_data))),
-                        random_state=42
-                    )
-                )
-                logger.info(f"Sampled {station}: from {len(station_data)} to {len(station_sample)} records")
-            else:
-                station_sample = station_data
-                logger.info(f"Using all {len(station_data)} records for {station}")
-            
-            sampled_df = pd.concat([sampled_df, station_sample], ignore_index=True)
-        
-        logger.info(f"Data size after sampling: {len(sampled_df)}")
-        
-        # Continue with the sampled data
-        df = sampled_df
-        
-        # Convert ride_day to datetime
-        df["ride_day"] = pd.to_datetime(df["ride_day"], errors="coerce")
-        logger.info(f"Date range: {df['ride_day'].min()} to {df['ride_day'].max()}")
-        
-        # Convert arrival planned column
-        df["scheduled_arrival"] = pd.to_datetime(df["scheduled_arrival"], errors="coerce")
-        
-        # Remove extreme negative delays
-        df = df[(df["DELAY"] >= -500)].copy()  # Use .copy() to avoid SettingWithCopyWarning
-        
-        # Add derived columns for analysis
-        df["is_delayed"] = df["DELAY"] > DELAY_THRESHOLD
-        df["day_of_week"] = df["ride_day"].dt.day_name()
-        df["hour"] = df["scheduled_arrival"].dt.hour
-        
-        # Create ordered categorical variable for day of week
-        weekday_order = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-        df["day_of_week"] = pd.Categorical(
-            df["day_of_week"], 
-            categories=weekday_order, 
-            ordered=True
-        )
-        
-        return df
+        return sample_df
         
     except Exception as e:
         logger.error(f"Error loading or preparing data: {e}")
-        # Add more detailed error information
-        if 'df' in locals() and isinstance(df, pd.DataFrame):
-            logger.error(f"DataFrame shape: {df.shape}")
-            logger.error(f"DataFrame columns: {df.columns.tolist()}")
-            if 'station_name' in df.columns:
-                logger.error(f"Unique station names: {df['station_name'].unique()}")
         raise
 
 
@@ -258,39 +458,14 @@ def get_pre_aggregated_data() -> Dict[str, pd.DataFrame]:
     Returns:
         Dict[str, pd.DataFrame]: Dictionary of pre-aggregated datasets
     """
-    df = load_and_prepare_data()
+    global _AGGREGATED_DATA_CACHE
     
-    result = {}
+    # Check if cache is already populated
+    if not _AGGREGATED_DATA_CACHE:
+        # If not, we need to process the data
+        _, _AGGREGATED_DATA_CACHE = stream_and_process_data()
     
-    # Pre-aggregate data for delay categories visualization
-    result["delay_categories"] = df.groupby(["station_name", "DELAY_CAT"], observed=True).size().reset_index(name="count")
-    
-    # Pre-aggregate data for train categories visualization
-    result["train_categories"] = df.groupby("train_category", observed=True)["DELAY"].mean().reset_index()
-    
-    # Pre-aggregate data for weekday heatmap
-    result["weekday_heatmap"] = df.groupby(["station_name", "day_of_week"], observed=True).agg(
-        total=("DELAY", "count"),
-        delayed=("is_delayed", "sum")
-    ).reset_index()
-    result["weekday_heatmap"]["pct_delayed"] = 100 * result["weekday_heatmap"]["delayed"] / result["weekday_heatmap"]["total"]
-    
-    # Pre-aggregate data for hourly lineplot
-    result["hourly_lineplot"] = df.groupby(["hour", "station_name"], observed=True).agg(
-        total=("DELAY", "count"),
-        delayed=("is_delayed", "sum")
-    ).reset_index()
-    result["hourly_lineplot"]["pct_delayed"] = 100 * result["hourly_lineplot"]["delayed"] / result["hourly_lineplot"]["total"]
-    
-    # Pre-aggregate data for station summary
-    result["station_summary"] = df.groupby("station_name", observed=True).agg(
-        avg_delay=("DELAY", "mean"),
-        total_trains=("DELAY", "count"),
-        delayed_trains=("is_delayed", "sum")
-    ).reset_index()
-    result["station_summary"]["pct_delayed"] = 100 * result["station_summary"]["delayed_trains"] / result["station_summary"]["total_trains"]
-    
-    return result
+    return _AGGREGATED_DATA_CACHE
 
 
 def get_delay_category_data() -> pd.DataFrame:
@@ -301,14 +476,7 @@ def get_delay_category_data() -> pd.DataFrame:
         pd.DataFrame: Processed data for visualization
     """
     aggregated_data = get_pre_aggregated_data()
-    counts = aggregated_data["delay_categories"]
-    
-    # Calculate percentages
-    totals = counts.groupby("station_name", observed=True)["count"].sum().reset_index(name="total")
-    counts = counts.merge(totals, on="station_name")
-    counts["percentage"] = 100 * counts["count"] / counts["total"]
-    
-    return counts
+    return aggregated_data["delay_categories"]
 
 
 def get_category_delay_data() -> pd.DataFrame:
@@ -319,10 +487,7 @@ def get_category_delay_data() -> pd.DataFrame:
         pd.DataFrame: Processed data for visualization
     """
     aggregated_data = get_pre_aggregated_data()
-    avg_by_category = aggregated_data["train_categories"]
-    avg_by_category = avg_by_category.sort_values(by="DELAY", ascending=False)
-    
-    return avg_by_category
+    return aggregated_data["train_categories"]
 
 
 def get_bubble_chart_data() -> pd.DataFrame:

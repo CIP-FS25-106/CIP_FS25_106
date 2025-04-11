@@ -60,7 +60,13 @@ def create_loading_section():
         className="loading-container",
         children=[
             html.Div(className="loading-spinner"),
-            html.Div("Loading data, please wait... (This may take 1-2 minutes)", style={"marginLeft": "15px"})
+            html.Div([
+                html.P("Loading and processing data, please wait...", style={"fontWeight": "bold"}),
+                html.P("The data is being streamed and processed in memory to optimize for limited resources.", 
+                       style={"fontSize": "0.9em"}),
+                html.P("This may take 1-3 minutes depending on connection speed.", 
+                       style={"fontSize": "0.9em"})
+            ], style={"marginLeft": "15px"})
         ]
     )
 
@@ -69,9 +75,9 @@ def create_error_section(error_message):
     return html.Div(
         className="dashboard-section",
         children=[
-            html.H2("Error Loading Data", className="section-title"),
+            html.H2("Error Processing Data", className="section-title"),
             html.P(
-                "There was an issue loading or processing the data. See details below:",
+                "There was an issue streaming or processing the data. See details below:",
                 className="section-description text-danger"
             ),
             dbc.Card(
@@ -89,10 +95,11 @@ def create_error_section(error_message):
                 children=[
                     html.P("Possible solutions:"),
                     html.Ul([
-                        html.Li("Check your internet connection to ensure data files can be downloaded"),
-                        html.Li("Verify that the target stations exist in the dataset"),
+                        html.Li("Check your internet connection to ensure data files can be streamed"),
+                        html.Li("The application may be experiencing high load - wait a few minutes and try again"),
+                        html.Li("Try accessing the dashboard during non-peak hours"),
+                        html.Li("Verify that your browser has sufficient memory available"),
                         html.Li(f"The dashboard is expecting data for these stations: {', '.join(TARGET_STATIONS_ORIGINAL)}"),
-                        html.Li("Try clearing your browser cache and reloading the page"),
                     ]),
                     dbc.Button("Retry Loading Data", id="retry-button", color="primary", className="mt-3")
                 ]
@@ -107,15 +114,17 @@ def create_performance_notice():
         children=[
             dbc.Alert(
                 [
-                    html.H4("Performance Optimization", className="alert-heading"),
+                    html.H4("Memory-Optimized Processing", className="alert-heading"),
                     html.P(
-                        "This dashboard is handling a large dataset (2.4+ million records). "
-                        "To ensure optimal performance, data has been sampled and pre-aggregated. "
-                        "This provides faster loading times while maintaining accurate analytical insights."
+                        "This dashboard processes train delay data using memory-efficient streaming techniques. "
+                        "The data is processed in chunks without requiring local storage, making it suitable for "
+                        "deployment on platforms with limited resources."
                     ),
                     html.Hr(),
                     html.P(
-                        "If you experience any performance issues, try closing other applications or using a different browser.",
+                        "The analysis uses a representative sample of data focusing on key stations: "
+                        f"{', '.join(TARGET_STATIONS_ORIGINAL)}. Each visualization is calculated incrementally "
+                        "to provide accurate insights while minimizing memory usage.",
                         className="mb-0"
                     )
                 ],
@@ -151,6 +160,9 @@ app.layout = dbc.Container(
                 )
             ]
         ),
+        
+        # Warning for long processing time
+        html.Div(id="timeout-warning", className="mt-3"),
         
         # Performance notice (initially hidden)
         html.Div(
@@ -193,9 +205,33 @@ app.layout = dbc.Container(
         ),
         
         # Initial data loading trigger
-        dcc.Interval(id="initial-load-trigger", interval=100, n_intervals=0, max_intervals=1)
+        dcc.Interval(id="initial-load-trigger", interval=100, n_intervals=0, max_intervals=1),
+        
+        # Progress update timer
+        dcc.Interval(id="processing-timer", interval=5000, n_intervals=0)
     ]
 )
+
+# Callback for timeout warning
+@app.callback(
+    Output("timeout-warning", "children"),
+    [Input("processing-timer", "n_intervals"),
+     Input("loading-complete", "data")]
+)
+def show_timeout_warning(n_intervals, loading_complete):
+    if loading_complete:
+        # Clear warning when loading is complete
+        return None
+    elif n_intervals and n_intervals > 5:  # After ~25 seconds
+        return dbc.Alert(
+            [
+                html.Strong("Processing is taking longer than expected. "), 
+                "Please continue to wait. The data is being streamed and processed in chunks to optimize memory usage."
+            ],
+            color="warning",
+            dismissable=True
+        )
+    return None
 
 # Callback to load data on startup
 @app.callback(
@@ -203,7 +239,8 @@ app.layout = dbc.Container(
      Output("dashboard-content", "children"),
      Output("error-message", "data"),
      Output("available-stations", "data"),
-     Output("missing-stations", "data")],
+     Output("missing-stations", "data"),
+     Output("processing-timer", "max_intervals")],
     [Input("initial-load-trigger", "n_intervals")],
     prevent_initial_call=True
 )
@@ -221,7 +258,7 @@ def load_data_on_startup(n_intervals):
         logger.info(f"Available stations: {available_stations}")
         logger.info(f"Missing stations: {missing_stations}")
         
-        # Create dashboard sections with loaded data (load lazily)
+        # Create dashboard sections with loaded data
         sections = [
             create_delay_distribution_section(df),
             create_category_delay_section(df),
@@ -230,7 +267,7 @@ def load_data_on_startup(n_intervals):
         ]
         
         logger.info("Data loaded and dashboard sections created successfully")
-        return True, sections, None, available_stations, missing_stations
+        return True, sections, None, available_stations, missing_stations, 0  # Stop the timer
     
     except Exception as e:
         logger.error(f"Error loading data: {e}")
@@ -239,7 +276,7 @@ def load_data_on_startup(n_intervals):
         error_details = traceback.format_exc()
         logger.error(f"Traceback: {error_details}")
         
-        return False, [], error_details, [], []
+        return False, [], error_details, [], [], 0  # Stop the timer
 
 # Callback to show dashboard or error content based on loading result
 @app.callback(
@@ -277,4 +314,4 @@ def retry_loading(n_clicks):
 # Run the app
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 8050))
-    app.run(host='0.0.0.0', port=port)
+    app.run(host='0.0.0.0', port=port, debug=False)  # Set debug=False for production
