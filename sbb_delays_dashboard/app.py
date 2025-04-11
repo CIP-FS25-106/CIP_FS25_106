@@ -17,14 +17,16 @@ import traceback
 from pathlib import Path
 
 # Import components and utilities
-from sbb_delays_dashboard.components.header import create_header
-from sbb_delays_dashboard.components.visualizations import (
+from components.header import create_header
+from components.visualizations import (
     create_delay_distribution_section,
     create_category_delay_section,
     create_station_delay_section,
     create_time_patterns_section
 )
-from sbb_delays_dashboard.utils.data_processing import load_and_prepare_data, TARGET_STATIONS, TARGET_STATIONS_ORIGINAL
+from utils.data_processing import load_and_prepare_data, TARGET_STATIONS, TARGET_STATIONS_ORIGINAL
+from components.loading import create_loading_section, create_loading_callbacks
+
 
 # Configure logging
 logging.basicConfig(
@@ -54,21 +56,8 @@ server = app.server
 # Configure app for performance
 app.config.suppress_callback_exceptions = True
 
-# Create loading spinner
-def create_loading_section():
-    return html.Div(
-        className="loading-container",
-        children=[
-            html.Div(className="loading-spinner"),
-            html.Div([
-                html.P("Loading and processing data, please wait...", style={"fontWeight": "bold"}),
-                html.P("The data is being streamed and processed in memory to optimize for limited resources.", 
-                       style={"fontSize": "0.9em"}),
-                html.P("This may take 1-6 minutes depending on connection speed.", 
-                       style={"fontSize": "0.9em"})
-            ], style={"marginLeft": "15px"})
-        ]
-    )
+# Register loading callbacks
+app = create_loading_callbacks(app)
 
 # Error message component
 def create_error_section(error_message):
@@ -240,7 +229,7 @@ def show_timeout_warning(n_intervals, loading_complete):
      Output("error-message", "data"),
      Output("available-stations", "data"),
      Output("missing-stations", "data"),
-     Output("processing-timer", "max_intervals")],
+     Output("loading-interval", "max_intervals")],
     [Input("initial-load-trigger", "n_intervals")],
     prevent_initial_call=True
 )
@@ -276,7 +265,7 @@ def load_data_on_startup(n_intervals):
         error_details = traceback.format_exc()
         logger.error(f"Traceback: {error_details}")
         
-        return False, [], error_details, [], [], 0  # Stop the timer
+        return False, [], error_details, [], [], 0    # Stop the timer
 
 # Callback to show dashboard or error content based on loading result
 @app.callback(
@@ -314,4 +303,4 @@ def retry_loading(n_clicks):
 # Run the app
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 8050))
-    app.run(host='0.0.0.0', port=port, debug=False)  
+    app.run(host='0.0.0.0', port=port, debug=False)
