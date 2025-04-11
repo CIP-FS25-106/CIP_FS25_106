@@ -64,7 +64,7 @@ def create_loading_section():
                 html.P("Loading and processing data, please wait...", style={"fontWeight": "bold"}),
                 html.P("The data is being streamed and processed in memory to optimize for limited resources.", 
                        style={"fontSize": "0.9em"}),
-                html.P("This may take 1-3 minutes depending on connection speed.", 
+                html.P("This may take 1-6 minutes depending on connection speed.", 
                        style={"fontSize": "0.9em"})
             ], style={"marginLeft": "15px"})
         ]
