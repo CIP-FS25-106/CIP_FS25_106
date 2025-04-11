@@ -13,7 +13,7 @@ from dash import dcc, html
 import numpy as np
 import logging
 from typing import Dict, List
-from utils.data_processing import (
+from sbb_delays_dashboard.utils.data_processing import (
     DELAY_THRESHOLD, 
     TARGET_STATIONS, 
     TARGET_STATIONS_ORIGINAL,

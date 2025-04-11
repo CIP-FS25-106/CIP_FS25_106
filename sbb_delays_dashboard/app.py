@@ -17,15 +17,15 @@ import traceback
 from pathlib import Path
 
 # Import components and utilities
-from components.header import create_header
-from components.visualizations import (
+from sbb_delays_dashboard.components.header import create_header
+from sbb_delays_dashboard.components.visualizations import (
     create_delay_distribution_section,
     create_category_delay_section,
     create_station_delay_section,
     create_time_patterns_section
 )
-from utils.data_processing import load_and_prepare_data, TARGET_STATIONS, TARGET_STATIONS_ORIGINAL
-from components.loading import create_loading_section, create_loading_callbacks
+from sbb_delays_dashboard.utils.data_processing import load_and_prepare_data, TARGET_STATIONS, TARGET_STATIONS_ORIGINAL
+from sbb_delays_dashboard.components.loading import create_loading_section, create_loading_callbacks
 
 
 # Configure logging
